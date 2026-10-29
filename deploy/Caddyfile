@@ -1,0 +1,11 @@
+# 环境变量 DOMAIN 必须设置为实际域名；站点根目录放 React dist 中的内容。
+{$DOMAIN} {
+    handle_path /api/* {
+        reverse_proxy 127.0.0.1:8080
+    }
+    handle {
+        root * /srv/inspection/frontend
+        try_files {path} /index.html
+        file_server
+    }
+}

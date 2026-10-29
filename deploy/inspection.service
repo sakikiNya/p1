@@ -1,0 +1,20 @@
+[Unit]
+Description=Park inspection API
+After=network.target
+
+[Service]
+Type=simple
+User=inspection
+Group=inspection
+WorkingDirectory=/srv/inspection
+EnvironmentFile=/srv/inspection/backend.env
+ExecStart=/srv/inspection/inspection
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/srv/inspection/data
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

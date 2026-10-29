@@ -1,0 +1,20 @@
+node_modules/
+frontend/dist/
+.cache/
+.env
+.env.local
+backend/data/
+backend/inspection
+unity/Library/
+unity/Temp/
+unity/Obj/
+unity/Logs/
+unity/UserSettings/
+unity/Builds/
+*.csproj
+*.sln
+frontend/*.tsbuildinfo
+__pycache__/
+
+# 部署截图包含环境信息，仅保留本地。
+/docs/screenshots/deployed-*.png
