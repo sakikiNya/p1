@@ -64,11 +64,13 @@ public class InspectionApp : MonoBehaviour
         camera.clearFlags = CameraClearFlags.SolidColor;
         camera.backgroundColor = Color.black;
         cameraObject.AddComponent<AudioListener>();
-        cameraObject.AddComponent<ARCameraManager>();
+        camera.useOcclusionCulling = false;
+        var cameraManager = cameraObject.AddComponent<ARCameraManager>();
+        cameraManager.requestedBackgroundRenderingMode = CameraBackgroundRenderingMode.BeforeOpaques;
         cameraObject.AddComponent<ARCameraBackground>();
         var pose = cameraObject.AddComponent<UnityEngine.InputSystem.XR.TrackedPoseDriver>();
-        pose.positionInput = new InputActionProperty(new InputAction("Position", binding: "<XRHMD>/centerEyePosition", expectedControlType: "Vector3"));
-        pose.rotationInput = new InputActionProperty(new InputAction("Rotation", binding: "<XRHMD>/centerEyeRotation", expectedControlType: "Quaternion"));
+        pose.positionInput = new InputActionProperty(InspectionPoseBindings.Position());
+        pose.rotationInput = new InputActionProperty(InspectionPoseBindings.Rotation());
         planes = originObject.AddComponent<ARPlaneManager>();
         planes.requestedDetectionMode = PlaneDetectionMode.Horizontal;
         planes.planePrefab = planePrefab;
@@ -160,13 +162,17 @@ public class InspectionApp : MonoBehaviour
         var pose = hit.pose;
 #endif
         if (!marker) marker = Instantiate(markerPrefab);
-#if INSPECTION_SIMULATION
-        foreach (var renderer in marker.GetComponentsInChildren<Renderer>()) renderer.sharedMaterial = Resources.Load<Material>("SimulationMarker");
-#endif
         marker.transform.SetPositionAndRotation(pose.position, pose.rotation);
         var p = marker.transform.position;
         coordinate.text = $"位置（米） X {p.x:F3} / Y {p.y:F3} / Z {p.z:F3}";
         feedback.text = "标记已放置；再次点击平面可移动。";
+        var markerRenderer = marker.GetComponentInChildren<Renderer>();
+        var view = Camera.main;
+        if (markerRenderer && view)
+        {
+            var material = markerRenderer.sharedMaterial;
+            Debug.Log($"Marker placed: shader={material?.shader?.name}, viewport={view.WorldToViewportPoint(markerRenderer.bounds.center)}, distance={Vector3.Distance(view.transform.position, markerRenderer.bounds.center):F2}m");
+        }
     }
     public void Submit()
     {

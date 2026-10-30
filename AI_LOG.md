@@ -287,3 +287,88 @@ P-028 最终验证：ARM64 与 x86_64 模拟 APK 均构建成功并通过签名�
 ### 结果
 
 - 采用。检查差异、文档、敏感数据排除规则并保存本地提交；包含同步的 Unity 验证资源及前后端改造，不提交真实环境配置、密码、数据库、缓存或构建产物。远程由用户手动推送。
+
+## P-037（最新主分支的真机标记显示排查）
+
+### Prompt 原文
+
+> 现在使用最新的 origin/master 分支
+> 若需模拟 使用arm模型机
+> 现在的问题是 我是用真机测试 看不到点出来的标志
+
+### 结果
+
+- 采用。fetch 后将本地 master 快进到 origin/master 的 9e51a24，保留原 unity-android-validation 分支，不修改前后端。
+- 本机实际 Unity 工程启用 URP，而 Marker.mat 使用 Standard、Plane.mat 使用旧 Unlit/Color；Setup 原本跳过已有资产，模拟版又覆盖标记材质，掩盖了真机材质问题。
+- Setup 现在迁移已有与新建材质为当前管线兼容的 Unlit，真机和模拟放置共用 Marker Prefab 材质；添加本地放置渲染诊断日志。
+- 新增 Inspection/Validate Marker Rendering：在实际 URP 中离屏渲染同一序列化 Prefab，旧材质为紫色错误材质（0 橙色像素），修复后为橙色（10304 像素），检查通过。此为 Editor 渲染回归，不是 Android ARM 模拟机或真机 AR 验收；本次没有使用 x86 AVD。
+- 构建和真机复验结果随后记录；不连接测试服务器，不推送远程。
+
+## P-038（真机现象确认）
+
+### Prompt 原文
+
+> 出现坐标，但看不到标记
+
+### 结果
+
+- 采用。用户确认放置命中与坐标更新成功，优先排查材质、渲染与可见性。Editor 已证明材质不兼容，但没有完整复现手机“完全不可见”，仍需新 ARM64 包在该真机回测。
+P-037 后续：Unity ARM64 构建结果 Success，生成 inspection-phone-arm64-marker-fix.apk；签名 v2/v3 通过且与前次手机包一致，解包检查仅 arm64-v8a、包含 UnityARCore、新放置诊断及本机默认 API 配置。真机回测尚未完成，未提交或推送本轮修复。
+
+## P-039（放大、动画及置顶显示）
+
+### Prompt 原文
+
+> 真机还是看不到  我怀疑被真实场景挡住了 我期望标志变大 最好还会动  图层放最上边而不是真实场景图层在最上边
+
+### 结果
+
+- 采用。标记方块由 10 厘米放大为 28 厘米，增加 48 厘米青色底盘；可见子物体浮动并旋转，根节点保留 AR 命中坐标。
+- 新增 Inspection/MarkerOverlay Shader，Overlay 队列 4000、ZTest Always、ZWrite Off；底盘队列 3999。标记在相机背景和场景物体之后绘制，表单 Canvas 仍正常交互。ARCameraManager 明确请求 BeforeOpaques，相机背景先绘制。
+- 更新现有 Prefab、材质及 Setup 迁移逻辑。Editor 前景遮挡回归：普通材质有遮挡时橙色像素为 0，置顶标记为 5202，动画帧为 6459；尺寸、动画变化及根坐标不变检查通过。
+- 以上为 Editor 真实渲染测试，不声称真机问题已解决。ARM64 构建及设备回测随后记录；未使用 x86 AVD，未连接项目 API，未运行前后端。
+
+P-039 补充排查：ARCore 5.2.0 注册 HandheldARInputDevice（直接继承 InputDevice），原相机只绑定 XRHMD/centerEyePosition 与 centerEyeRotation，不能匹配该手机布局。新增共享 InspectionPoseBindings，包含 HandheldARInputDevice/devicePosition、deviceRotation，并保留 XRHMD 作为编辑器兼容绑定。输入布局对照验证旧绑定不匹配手机设备，新绑定位置/旋转可解析；Play 模式注入手机布局位置、四元数并成功读取。新包重新构建以包含此项，真机最终回测仍待完成。测试期间 Editor XR Simulation 热重载曾产生 CameraTextureProvider 空引用日志，停止后重新进入 Play；不把该 Editor 测试记为真机验证。
+P-039 最终构建：已重新生成包含手机位姿修正的 inspection-phone-arm64-overlay-animated.apk，Unity 构建 Success，签名 v2/v3 通过并沿用原手机密钥；解包确认 ARM64、ARCore 库、置顶 Shader、动画组件、手机输入绑定与默认 API 配置。SHA-256：f68cb9f67dc55839dc514b133d8287d5190a0eb4ad04c7cb26a57871b8fd41c7。真机回测未完成，本轮改动未提交或推送。
+
+## P-040（缩小标记与透明网格）
+
+### Prompt 原文
+
+> 现在可以看到了  但是新的问题来了
+>
+> 这次修改
+>
+> 1. 把标记大小变成现在的1/4
+> 2. 可点击部位(底盘) 透明度改成10% 不能完全覆盖现实场景 同时又全实体改为网格状
+
+### 结果
+
+- 采用。用户确认上一版真机标记已经可见；本轮将方块 28cm 改为 7cm、底盘 48cm 改为 12cm，浮动高度和幅度同比缩小，保留旋转与置顶显示、手机位姿修复和根坐标。
+- 新增 TransparentGrid Shader，将底盘和检测平面设为 10% 不透明度，网格空隙透空；底盘使用单层圆盘 Mesh，避免上下两层透明叠加变浓。不改变检测平面真实范围或 AR 点击命中逻辑。
+- Editor 渲染回归：方块 0.07m、底盘 0.12m，两材质 alpha 均 0.1；检测平面仅 9840/65536 像素发生网格颜色变化，底盘内部仅 3652/20069 像素变化，空隙保留背景。动画、置顶与根坐标不变验证通过。
+- 新 ARM64 构建和设备回测结果后续记录；未连接 API 或运行前后端。
+
+## P-041（网格范围确认）
+
+### Prompt 原文
+
+> 两者都改成透明网格
+
+### 结果
+
+- 采用。青色标记底盘与整片可点击检测平面都改为 10% 不透明度的网格，而非仅调整其中一个。
+
+P-040 后续：新 ARM64 包 inspection-phone-arm64-small-grid.apk 构建成功，签名 v2/v3 与原手机签名一致；解包确认新透明网格/置顶 Shader、手机位姿绑定及默认 API 配置。SHA-256：336a061d1bd6375a164af12689c2c265894190ce98c41b80031e300314b5151b。新外观真机回测待完成，未提交或推送。
+
+## P-042（真机确认与 Git 提交）
+
+### Prompt 原文
+
+> 可以了 提交git
+
+### 结果
+
+- 用户确认最新 inspection-phone-arm64-small-grid.apk 真机外观回测通过：缩小标记、底盘与检测平面透明网格可接受。
+- 更新 plan 与验收记录，将本轮真机外观回测标记完成；此反馈不代替服务器闭环、断网恢复、独立工程导入或视频等其他待验收项。
+- 按指令在当前 master 创建本地 Git 提交，包含本轮标记渲染、手机位姿绑定、动画、四分之一尺寸、透明网格、Editor 验证工具及对应文档。不修改前后端，不提交 APK 或本机服务器地址，不推送远程。

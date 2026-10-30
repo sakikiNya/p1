@@ -142,7 +142,7 @@ SQLite 保存问题、用户、密码哈希和会话。密码使用 bcrypt 哈�
 
 前后端在服务器运行；Windows 负责 Unity/Android 开发和设备测试。当前 Unity 源码与资源来自 `unity-android-validation` 的 `4017994`，使用 Unity **2022.3.62f3c1**、AR Foundation/ARCore **5.2.0**、XR Management **4.5.0**、Input System **1.14.0**、URP **14.0.12**。
 
-使用 Unity Hub 打开 `unity/`，等待包解析和编译，手动执行 **Inspection → Setup Project**，打开 `Assets/Scenes/Inspection.unity`。输入模式为 **Input System Package (New)**。场景、Prefab 和 `.meta` 已纳入源码；仓库副本仍需在安装 Unity 的机器上完成独立导入验证。
+使用 Unity Hub 打开 `unity/`，等待包解析和编译，手动执行 **Inspection → Setup Project**，打开 `Assets/Scenes/Inspection.unity`。输入模式为 **Input System Package (New)**。AR 相机绑定手机 HandheldARInputDevice 的位置/旋转，并保留 XRHMD 兼容输入；Play 模式可通过 **Inspection → Validate Handheld Pose Input** 复查手机布局绑定。 Setup 与构建会把标记升级为置顶动画样式（7 厘米浮动旋转方块、12 厘米青色网格底盘），底盘和检测平面均使用 10% 不透明度的透空网格；标记位于相机背景与场景物体之前，不受深度遮挡。URP 工程可执行 **Inspection → Validate Marker Rendering**，用前景遮挡物渲染同一 Marker Prefab，输出 Builds/marker-grid-validation.json 与对照图，并检查动画不改变标记根节点坐标。该检查覆盖 Editor 渲染，真机可见性仍需设备回测。场景、Prefab 和 `.meta` 已纳入源码；仓库副本仍需在安装 Unity 的机器上完成独立导入验证。
 
 | 构建菜单 | 产物 | 用途 |
 | --- | --- | --- |

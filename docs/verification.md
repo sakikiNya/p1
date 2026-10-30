@@ -102,3 +102,38 @@ AVD 放置标记显示坐标、空标题被阻止；应用创建 `[SIMULATION TE
 5. 两段各 3～5 分钟手机和电脑视频，按 docs/demo.md 保存文件或链接。
 
 题目全部验收尚未完成。源码、已验证模拟流程与最新 APK 可交接，未完成项按 plan.md 继续。
+
+## 真机标记显示修复（2026-10-30，基于 origin/master 9e51a24）
+
+- 用户确认点击后出现坐标但无可见标记，说明放置路径执行；实际工程 URP 与 Marker Standard / Plane Unlit-Color 不匹配。修正 Setup，使已存在的材质同样迁移，移除仅模拟版替换标记材质的分支。
+- 新增可重复菜单 Inspection/Validate Marker Rendering。在 URP-Performant、256×256 渲染中，旧 Standard 材质显示紫色错误材质，橙色像素 0；真实 Marker Prefab 修复材质橙色像素 10304，验证通过。输出 Builds/marker-render-validation.json 和两张对照 PNG。
+- 该检查仅证明 Editor 的材质回归已修复，没有完整复现真机完全不可见；真机 AR 回测仍待完成。放置日志增加 shader、viewport 与 distance 以便继续排查。
+- 本次未运行 Android 模拟机；需要时依用户要求采用 ARM 模型机。没有连接项目 API，也没有运行 Windows 前后端。
+- 新 ARM64 包 inspection-phone-arm64-marker-fix.apk 构建 Success；签名 v2/v3 及原证书一致，只有 arm64-v8a、ARCore 桥接库、新放置诊断和默认地址均已确认。SHA-256：f4bf6e6d76fb7097d420302085318b0192eafb5e07145c243007ea4d1ae7badd。真机复测待用户安装确认。
+
+## 放大、动画与置顶显示（2026-10-30）
+
+- 用户反馈上一版真机仍不可见，要求更大、可动且显示在真实背景前。本轮不把“背景遮挡”当作已证实的唯一根因，而是按要求明确实现置顶绘制。
+- 标记方块 0.28m，底盘 0.48m，子物体每秒一轮上下浮动（幅度 0.05m）并每秒旋转 55 度；根节点和上报位置不随动画变化。
+- 自定义 MarkerOverlay 使用透明末尾队列 4000、ZTest Always、ZWrite Off；AR 相机请求 BeforeOpaques。世界空间定位仍由 AR 命中决定，UI 表单正常显示在场景之上。
+- Inspection/Validate Marker Rendering 在 URP-Performant 用前景物体遮挡真实序列化 Prefab：普通材质无遮挡 8824 橙色像素、遮挡后 0；置顶材质 5202、动画帧 6459。animationMoved 与 anchorUnchanged 均为 true，验证通过。文件 Builds/marker-overlay-validation.json 与对照图。
+- 本轮没有 Android 模拟机或真机运行证据；新 ARM64 包需在用户原真机覆盖安装复测。
+
+- 补充定位到手机相机位姿绑定错误：ARCore 注册的是 HandheldARInputDevice，原 XRHMD-only 绑定不匹配。增加手机 devicePosition/deviceRotation，保留编辑器头显绑定。Play 模式合成设备验证旧绑定不匹配、两个新绑定匹配，位置和旋转值读取通过；这只是输入回归，没有连接真机。
+- 最终 ARM64 包 inspection-phone-arm64-overlay-animated.apk 已包含手机位姿修正，构建 Success；签名 v2/v3 通过，原签名一致。解包确认 Overlay Shader、动画组件及手机位置/旋转绑定均在包内，原默认 API 配置保留。SHA-256：f68cb9f67dc55839dc514b133d8287d5190a0eb4ad04c7cb26a57871b8fd41c7。设备可见性仍待用户真机复测。
+
+## 四分之一尺寸与透明网格（2026-10-30）
+
+- 用户确认上版真机已经能看到标记；本轮新增外观调整尚未真机回测。
+- 方块宽度 0.07m、底盘直径 0.12m；浮动中心 0.075m、幅度 0.0125m，均为上一版的 1/4。AR 根坐标及位姿输入不变。
+- 底盘与检测平面均使用 TransparentGrid，alpha=0.1；网格间隙 clip 透空、ZWrite Off。底盘改用单层圆盘 Mesh（高度 0），避免自身前后两面叠加；底盘仍置顶，检测平面保持正常深度规则。
+- Editor 回归通过：普通材质被遮挡为 0 橙色像素，置顶为 326、动画帧 401；animationMoved/anchorUnchanged 均 true。检测平面网格只改变 9840/65536 像素；底盘内部只改变 3652/20069 像素，其余保留背景。两个 alpha 均核对为 0.1。
+- 输出 Builds/marker-grid-validation.json、grid-detected-plane.png、grid-marker-base.png。点击范围未随网格空隙变化，仍使用原 AR 平面命中。
+
+- 新 ARM64 包 inspection-phone-arm64-small-grid.apk 构建成功，签名 v2/v3 与原手机签名一致；解包确认新透明网格/置顶 Shader、手机位姿绑定及默认 API 配置。SHA-256：336a061d1bd6375a164af12689c2c265894190ce98c41b80031e300314b5151b。新外观真机回测待完成，未提交或推送。
+
+## 最新真机外观确认与提交（2026-10-30）
+
+- 用户安装最新 inspection-phone-arm64-small-grid.apk 后反馈“可以了 提交git”，本轮 7cm 标记、12cm 底盘及两类 10% 不透明度网格的真机外观回测通过。此为用户反馈证据，未取得设备日志或录屏。
+- 此确认仅覆盖本轮外观问题；服务器同一 ID 闭环、失败恢复、仓库副本独立导入及演示视频等项目仍按 plan 待验收。
+- 本轮源码与验证文档创建本地 Git 提交，未推送；未运行前后端或连接项目 API。

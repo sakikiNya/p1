@@ -50,22 +50,25 @@ public static class ProjectSetup
             var dropdown = DefaultControls.CreateDropdown(new DefaultControls.Resources());
             PrefabUtility.SaveAsPrefabAsset(dropdown, "Assets/Resources/PriorityDropdown.prefab"); UnityEngine.Object.DestroyImmediate(dropdown);
         }
+        // Upgrade existing generated materials too: old prefabs survive Setup reruns.
+        // Standard/Unlit-Color passes are incompatible with the template's URP renderer.
+        var markerMaterial = EnsureMarkerMaterial("Assets/Prefabs/Marker.mat", new Color(1,.35f,.05f), 4000);
+        var planeMaterial = EnsureGridMaterial("Assets/Prefabs/Plane.mat", new Color(.18f,.65f,.43f,.1f), .1f, .002f, 3000, CompareFunction.LessEqual);
         var marker = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Prefabs/Marker.prefab");
         if (!marker)
         {
             var root = new GameObject("Marker");
             var cube = GameObject.CreatePrimitive(PrimitiveType.Cube); cube.transform.SetParent(root.transform,false);
             cube.transform.localPosition = new Vector3(0,.05f,0); cube.transform.localScale = Vector3.one*.1f;
-            var material = new Material(Shader.Find("Standard")); material.color = new Color(1,.35f,.05f);
-            AssetDatabase.CreateAsset(material,"Assets/Prefabs/Marker.mat"); cube.GetComponent<Renderer>().sharedMaterial = material;
+            cube.GetComponent<Renderer>().sharedMaterial = markerMaterial;
             marker = PrefabUtility.SaveAsPrefabAsset(root,"Assets/Prefabs/Marker.prefab"); UnityEngine.Object.DestroyImmediate(root);
         }
+        UpgradeMarkerVisual(markerMaterial);
         var plane = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Prefabs/Plane.prefab");
         if (!plane)
         {
             var root = new GameObject("Detected Horizontal Plane",typeof(ARPlane),typeof(MeshFilter),typeof(MeshRenderer),typeof(ARPlaneMeshVisualizer));
-            var material = new Material(Shader.Find("Unlit/Color")); material.color = new Color(.18f,.65f,.43f);
-            AssetDatabase.CreateAsset(material,"Assets/Prefabs/Plane.mat"); root.GetComponent<MeshRenderer>().sharedMaterial = material;
+            root.GetComponent<MeshRenderer>().sharedMaterial = planeMaterial;
             plane = PrefabUtility.SaveAsPrefabAsset(root,"Assets/Prefabs/Plane.prefab"); UnityEngine.Object.DestroyImmediate(root);
         }
         if (!File.Exists(ScenePath))
@@ -77,6 +80,103 @@ public static class ProjectSetup
         EditorBuildSettings.scenes = new[] { new EditorBuildSettingsScene(ScenePath,true) };
         AssetDatabase.SaveAssets();
         Debug.Log("Inspection setup complete. Open Assets/Scenes/Inspection.unity. Check XR Simulation environment and XR Project Validation before building.");
+    }
+    static Material EnsureMarkerMaterial(string path, Color color, int queue)
+    {
+        var shader = Shader.Find("Inspection/MarkerOverlay");
+        if (!shader) throw new Exception("Marker overlay shader is missing.");
+        var material = AssetDatabase.LoadAssetAtPath<Material>(path);
+        if (!material)
+        {
+            material = new Material(shader);
+            AssetDatabase.CreateAsset(material, path);
+        }
+        material.shader = shader;
+        material.shaderKeywords = Array.Empty<string>();
+        material.SetColor("_BaseColor", color);
+        material.renderQueue = queue;
+        EditorUtility.SetDirty(material);
+        return material;
+    }
+    static void UpgradeMarkerVisual(Material material)
+    {
+        var baseMaterial = EnsureGridMaterial("Assets/Prefabs/MarkerBase.mat", new Color(.05f,.9f,1,.1f), .015f, .0005f, 3999, CompareFunction.Always);
+        const string path = "Assets/Prefabs/Marker.prefab";
+        var root = PrefabUtility.LoadPrefabContents(path);
+        try
+        {
+            var cube = root.transform.Find("Cube");
+            if (!cube) throw new Exception("Generated Marker prefab is missing its Cube child.");
+            cube.localScale = Vector3.one * .07f;
+            cube.localPosition = new Vector3(0,.075f,0);
+            cube.localRotation = Quaternion.Euler(15,0,15);
+            cube.GetComponent<Renderer>().sharedMaterial = material;
+            var visual = root.GetComponent<InspectionMarkerVisual>();
+            if (!visual) visual = root.AddComponent<InspectionMarkerVisual>();
+            visual.floatingVisual = cube;
+            var markerBase = root.transform.Find("Visibility Base");
+            if (!markerBase)
+            {
+                var cylinder = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+                markerBase = cylinder.transform;
+                markerBase.name = "Visibility Base";
+                markerBase.SetParent(root.transform, false);
+                UnityEngine.Object.DestroyImmediate(cylinder.GetComponent<Collider>());
+            }
+            markerBase.GetComponent<MeshFilter>().sharedMesh = MarkerBaseDisk();
+            markerBase.localPosition = new Vector3(0,.00375f,0);
+            markerBase.localScale = new Vector3(.12f,1,.12f);
+            markerBase.GetComponent<Renderer>().sharedMaterial = baseMaterial;
+            foreach (var renderer in root.GetComponentsInChildren<Renderer>())
+            {
+                renderer.shadowCastingMode = ShadowCastingMode.Off;
+                renderer.receiveShadows = false;
+                renderer.allowOcclusionWhenDynamic = false;
+            }
+            PrefabUtility.SaveAsPrefabAsset(root, path);
+        }
+        finally { PrefabUtility.UnloadPrefabContents(root); }
+    }
+    static Material EnsureGridMaterial(string path, Color color, float spacing, float width, int queue, CompareFunction depthTest)
+    {
+        var shader = Shader.Find("Inspection/TransparentGrid");
+        if (!shader) throw new Exception("Transparent grid shader is missing.");
+        var material = AssetDatabase.LoadAssetAtPath<Material>(path);
+        if (!material)
+        {
+            material = new Material(shader);
+            AssetDatabase.CreateAsset(material,path);
+        }
+        material.shader = shader;
+        material.shaderKeywords = Array.Empty<string>();
+        material.SetColor("_BaseColor",color);
+        material.SetFloat("_GridSpacing",spacing);
+        material.SetFloat("_LineWidth",width);
+        material.SetFloat("_ZTest",(float)depthTest);
+        material.renderQueue = queue;
+        EditorUtility.SetDirty(material);
+        return material;
+    }
+    static Mesh MarkerBaseDisk()
+    {
+        const string path = "Assets/Prefabs/MarkerBaseDisk.asset";
+        var mesh = AssetDatabase.LoadAssetAtPath<Mesh>(path);
+        if (mesh) return mesh;
+        const int segments = 64;
+        var vertices = new Vector3[segments+1];
+        var triangles = new int[segments*3];
+        for (int i=0;i<segments;i++)
+        {
+            float angle = i * Mathf.PI * 2 / segments;
+            vertices[i+1] = new Vector3(Mathf.Cos(angle)*.5f,0,Mathf.Sin(angle)*.5f);
+            triangles[i*3] = 0;
+            triangles[i*3+1] = (i+1)%segments+1;
+            triangles[i*3+2] = i+1;
+        }
+        mesh = new Mesh { name = "Marker Base Single Surface", vertices = vertices, triangles = triangles };
+        mesh.RecalculateNormals(); mesh.RecalculateBounds();
+        AssetDatabase.CreateAsset(mesh,path);
+        return mesh;
     }
     static void ConfigureXR()
     {
@@ -144,10 +244,28 @@ public static class ProjectSetup
     }
     static void SimulationMaterial(string name, Color color)
     {
-        var path = "Assets/Resources/" + name + ".mat";
-        if (AssetDatabase.LoadAssetAtPath<Material>(path)) return;
-        var shader = Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Unlit/Color");
-        var material = new Material(shader); material.color = color;
-        AssetDatabase.CreateAsset(material, path);
+        EnsureUnlitMaterial("Assets/Resources/" + name + ".mat", color);
     }
+    static Material EnsureUnlitMaterial(string path, Color color)
+    {
+        var shaderName = GraphicsSettings.currentRenderPipeline ? "Universal Render Pipeline/Unlit" : "Unlit/Color";
+        var shader = Shader.Find(shaderName);
+        if (!shader) throw new Exception("Required marker shader not found: " + shaderName);
+        var material = AssetDatabase.LoadAssetAtPath<Material>(path);
+        if (!material)
+        {
+            material = new Material(shader);
+            AssetDatabase.CreateAsset(material, path);
+        }
+        material.shader = shader;
+        material.shaderKeywords = Array.Empty<string>();
+        if (material.HasProperty("_BaseColor")) material.SetColor("_BaseColor", color);
+        if (material.HasProperty("_Color")) material.SetColor("_Color", color);
+        if (material.HasProperty("_Surface")) material.SetFloat("_Surface", 0);
+        if (material.HasProperty("_ZWrite")) material.SetFloat("_ZWrite", 1);
+        material.renderQueue = -1;
+        EditorUtility.SetDirty(material);
+        return material;
+    }
+
 }
