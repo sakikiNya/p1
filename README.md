@@ -1,162 +1,174 @@
-# 园区巡检问题标注原型
+# 园区巡检
 
-Unity AR 放置标记并上报 → Go 保存 JSON → React 查看问题并更新状态。所有项目文件位于 `/home/skk/go_project/p1`。
+基于 Unity AR、Go 和 React 的现场问题上报与管理应用。巡检人员在水平面上放置标记、填写问题并上报；管理人员通过网页查看记录和更新处理状态。问题、账号及登录会话保存到 SQLite。
 
-## 当前完成情况
+## 功能
 
-- Go API、校验、CORS、并发保护、JSON 临时文件替换持久化及关键测试已实现并通过检查。
-- React 列表、优先级/状态/坐标/时间展示、状态保存、空列表、失败提示和重试已实现；构建及实际浏览器联调通过。
-- Unity C# 源码、依赖版本、AR 场景/Prefab/设置生成器已提供。**当前机器没有 Unity Editor、adb 或 ARCore 真机，尚未完成 Unity 导入、编译、XR Simulation 运行、APK 构建和真机验收。** 场景和 Prefab 在 Unity 首次打开时生成，需将生成的资源及 `.meta` 一起纳入最终交付。
-- 当前服务器部署配置已改为 `0.0.0.0:${PORT}`，Go 同时托管页面与 `/api`，运维见 `deploy/README.md`；用户已验证公网可访问，详细证据见 `docs/verification.md`。
-- 两段 3～5 分钟演示视频尚未录制。见 [验收记录](docs/verification.md) 与 [演示脚本](docs/demo.md)。
+- AR 水平面检测、标记放置、问题表单、提交反馈与 UI 防误触。
+- 问题列表、标题/描述/编号搜索、优先级和状态筛选。
+- `open`、`in_progress`、`resolved` 三种处理状态。
+- 用户登录、退出、修改密码；关闭浏览器或重启服务后，在会话有效期内保持登录。
+- 初始账号 `Admin` 为超级管理员，可添加普通用户与管理员。
+- 无域名 HTTP 部署：Caddy 托管页面，将 `/api/*` 转发到本机 Go 服务。
 
-## 版本
+| 角色 | 网页操作 | 账号管理 |
+| --- | --- | --- |
+| 普通用户 `user` | 查看、搜索、筛选问题 | 修改自己的密码 |
+| 管理员 `admin` | 普通用户操作及修改问题状态 | 修改自己的密码 |
+| 超级管理员 `super_admin` | 管理员操作 | 添加普通用户和管理员、查看用户列表、修改自己的密码 |
 
-| 部分 | 版本及验证情况 |
-| --- | --- |
-| Go | 实际运行 1.22.2，使用标准库，无第三方 Go 依赖 |
-| Node.js / npm | 实际运行 v24.21.0 / 11.19.0 |
-| React / React DOM | 锁文件解析为 19.3.1 |
-| TypeScript / Vite | 实际构建使用 5.9.3 / 7.3.7 |
-| Unity | 目标 2022.3.62f1 LTS，尚未实际安装/打开 |
-| AR Foundation / ARCore XR Plug-in | 固定 5.1.6 / 5.1.6 |
-| XR Management / Input System | 固定 4.4.0 / 1.7.0 |
-| Android Studio | 用户提供 Rabbit 2 \| 2026.2.2；本机未验证其 SDK/AVD |
+**问题 API 按当前需求保持免认证，Unity 无需登录。** 用户管理 API 在后端校验超级管理员权限；网页对问题操作的角色限制不等同于问题 API 的访问控制。
 
-`frontend/package-lock.json` 锁定实际前端依赖，使用 `npm ci` 安装。根目录原有 npm 配置保留，不用于启动管理端。Unity 会在首次解析包后生成 `Packages/packages-lock.json`，需保留。
-
-## 目录
+## 目录与环境
 
 ```text
-backend/       Go 源码、测试；默认运行数据 backend/data/issues.json
+backend/       Go API、SQLite 数据层、登录和测试
 frontend/      React + TypeScript 管理端
-unity/         Unity 项目及场景/Prefab 生成器
-scripts/       构建与浏览器检查脚本
-deploy/        环境模板、Caddy、systemd、部署说明
-docs/          验收证据与演示脚本
-AI_LOG.md      当前可见会话的实际 Prompt 原文
+unity/         Unity AR 工程
+scripts/       构建、进程管理和浏览器检查
+deploy/       Caddy、环境模板与 systemd 示例
+docs/         验收材料与演示说明
 ```
 
-## 当前服务器访问
+- Go 1.22 或以上；SQLite 使用纯 Go 驱动，无需安装数据库服务或启用 CGO。
+- Node.js 22.12 或以上、npm。
+- 部署需 Caddy 2；本地前端开发可使用 Vite 代理。
+- Unity 目标版本见 `unity/ProjectSettings/ProjectVersion.txt`，AR 包版本见 `unity/Packages/manifest.json`；Android 需对应的 Build Support、SDK、NDK 和 OpenJDK。
 
-下文 `${HOST}` 表示服务器的公网 IP 或域名，`${PORT}` 表示端口（以部署配置为准）。使用命令前先设置：
+## 本地开发
 
-```bash
-export HOST='你的服务器IP或域名'
-export PORT='你的部署端口'
-```
-
-Markdown 中的占位符需自行替换；Unity 地址输入框和 `api-config.txt` 应填写替换后的完整地址，不会展开环境变量。
-
-管理端：`http://${HOST}:${PORT}/`；Unity API：`http://${HOST}:${PORT}/api`。运行配置在 `deploy/.env`，使用 `python3 scripts/server.py start|stop|restart|status` 管理（每次选择一个动作）。这是临时 HTTP 后台进程，未配置开机自启。
-
-## 本地开发：启动 Go 与 React
-
-终端一：
+在项目根目录打开两个终端。首次启动须设置初始 Admin 密码（12～72 字节）：
 
 ```bash
-cd /home/skk/go_project/p1/backend
+cd backend
+read -rsp 'Initial Admin password: ' ADMIN_PASSWORD
+export ADMIN_PASSWORD
 go run .
 ```
 
-终端二：
-
 ```bash
-cd /home/skk/go_project/p1/frontend
+cd frontend
 npm ci
 npm run dev
 ```
 
-打开终端中显示的地址（默认 `http://localhost:5173`）。Vite 将 `/api` 代理到 `http://127.0.0.1:8080`，两端访问真实 Go 数据。页面不内置问题样例；需要从 Unity 或下面的 curl 创建数据。
+打开 Vite 输出的地址，使用 `Admin` 和刚设置的密码登录。开发页面默认通过 `/api` 代理访问 `http://127.0.0.1:8080`。`ADMIN_PASSWORD` 只在初始化账号时使用，后续修改环境变量不会重置已有密码。
 
-Go 配置（进程环境变量）：
+首次进入“用户管理”可加载用户列表并添加账号。用户首次登录后可在“修改密码”中更换初始密码。修改密码会使该账号的所有登录会话失效，需要重新登录。
 
-| 变量 | 默认值 | 说明 |
-| --- | --- | --- |
-| LISTEN_ADDR | 0.0.0.0:8080 | 本地开发监听；反向代理部署改为 127.0.0.1:8080 |
-| DATA_FILE | data/issues.json | 相对于 Go 启动目录，重启务必使用同一路径；上线建议绝对路径 |
-| FRONTEND_DIR | 空 | 设置后由 Go 托管 React dist，API 统一位于 /api；当前服务器使用部署环境文件配置 |
-| CORS_ORIGINS | http://localhost:5173,http://127.0.0.1:5173 | 允许的浏览器来源，逗号分隔，不含末尾斜线 |
+## 无域名 HTTP 部署
 
-若端口被占用，不要停止其他服务。例如：
+对外页面为 `http://${HOST}:${PORT}/`，Unity 后端地址为 `http://${HOST}:${PORT}/api`。`${HOST}`、`${PORT}` 是文档占位符，替换为自己的服务器地址与端口；Unity 输入框不会展开环境变量。
 
-```bash
-# Go 终端，在 backend/ 中
-LISTEN_ADDR=0.0.0.0:18080 go run .
-# 前端终端，在 frontend/ 中
-DEV_API_TARGET=http://127.0.0.1:18080 npm run dev -- --port 15173 --strictPort
+1. 复制 `deploy/.env.example` 为 `deploy/.env`，填写 `HOST`、`PORT` 和初始 `ADMIN_PASSWORD`。保留 Go 的回环监听地址，确保 `API_UPSTREAM` 与 `LISTEN_ADDR` 一致。
+2. 构建并启动：
+
+   ```bash
+   bash scripts/build-release.sh
+   python3 scripts/server.py start
+   python3 scripts/server.py status
+   ```
+
+3. 访问 `http://${HOST}:${PORT}/api/health`，应返回 `{"status":"ok"}`，然后打开网页登录。
+4. 更新源码后重新构建，执行 `python3 scripts/server.py restart`。停止使用 `python3 scripts/server.py stop`。
+
+脚本启动本项目的 Go 与 Caddy 后台进程，不修改系统已有 Caddy 配置。日志在 `.cache/server/server.log`、`.cache/server/caddy.log`。普通后台进程不会开机自启；长期运行可使用 [部署说明](deploy/README.md) 中的 systemd 示例。
+
+当前不启用域名、证书或 HTTPS；HTTP 使用 `COOKIE_SECURE=false`。环境文件、SQLite 文件和真实部署截图不提交到 Git。
+
+### 环境变量
+
+| 变量 | 用途 |
+| --- | --- |
+| `PORT` / `BIND_HOST` | Caddy 对外端口和监听网卡 |
+| `HOST` | 访问地址说明使用的主机名，不限制 Caddy 的 Host 请求头 |
+| `USE_CADDY` | `true` 启动 Caddy；`false` 由 Go 同时提供页面和 `/api` |
+| `LISTEN_ADDR` | Go 监听地址，本地开发默认 `0.0.0.0:8080`，Caddy 部署使用回环地址 |
+| `API_UPSTREAM` | Caddy 转发目标，须与 Go 监听地址一致 |
+| `DB_FILE` | SQLite 路径，Go 默认 `data/inspection.db`，相对于进程工作目录 |
+| `LEGACY_JSON_FILE` | 可选：旧问题 JSON 路径，用于一次性迁移 |
+| `FRONTEND_DIR` | 构建后的静态资源目录 |
+| `ADMIN_PASSWORD` | 首次创建 Admin 的密码，12～72 字节，不会覆盖已有密码 |
+| `COOKIE_SECURE` | HTTP 为 `false`，后续启用 HTTPS 时设为 `true` |
+| `CORS_ORIGINS` | 允许的浏览器来源，逗号分隔；同域访问无需添加来源 |
+| `VITE_API_BASE_URL` | 前端 API 前缀，默认 `/api`；构建时生效 |
+| `DEV_API_TARGET` | Vite 开发代理目标，默认 `http://127.0.0.1:8080` |
+
+`server.py` 的 `.env` 解析器只读取键值，不执行 shell 命令，也不展开 `${...}`。模板中的路径相对于项目根目录；直接运行 `go run` 时路径相对于其工作目录。
+
+## 数据与迁移
+
+SQLite 保存问题、用户、密码哈希和会话。密码使用 bcrypt 哈希，会话以 HttpOnly、SameSite=Lax Cookie 保存，默认有效期 24 小时；数据库中只保存会话令牌的哈希。
+
+从旧 JSON 版本升级时，将 `LEGACY_JSON_FILE` 指向原数据文件并将 `DB_FILE` 指向新的 SQLite 文件。启动时在一个事务中导入问题，保留原 ID、状态、坐标和时间；导入成功后记录迁移标记，后续启动不会再次导入。损坏文件、重复 ID 或已有非空数据库会导致迁移失败，不会部分写入，也不会修改原 JSON。
+
+重新部署不要覆盖 `DB_FILE`。SQLite 使用 WAL 模式，运行时不要只复制 `.db` 文件作为备份；可使用 SQLite 的 `.backup` 命令，或停止本项目后再备份数据库。备份包含用户及会话数据，应与环境文件一并妥善保存。
+
+## API
+
+下表为 Go 内部路径。通过 Caddy 访问时加 `/api` 前缀，例如 `/api/issues`。
+
+| 方法 | 路径 | 输入/用途 | 权限 |
+| --- | --- | --- | --- |
+| GET | `/health` | 服务与数据库状态 | 开放 |
+| GET | `/issues` | 返回问题数组；空列表为 `[]` | 开放 |
+| POST | `/issues` | 创建问题 | 开放 |
+| PATCH | `/issues/{id}/status` | `{"status":"resolved"}` | 开放 |
+| POST | `/auth/login` | `{"username":"Admin","password":"..."}` | 开放 |
+| GET | `/auth/me` | 当前用户 | 登录 |
+| POST | `/auth/logout` | 注销当前会话 | 当前会话 |
+| PATCH | `/auth/password` | `currentPassword`、`newPassword` | 登录 |
+| GET | `/users` | 用户列表，不包含密码哈希 | 超级管理员 |
+| POST | `/users` | `username`、`password`、`role` | 超级管理员 |
+
+创建问题：
+
+```json
+{
+  "title": "入口墙面破损",
+  "description": "左侧墙体存在裂缝",
+  "priority": "high",
+  "position": {"x": 0.42, "y": 0.03, "z": 1.26}
+}
 ```
 
-`DEV_API_TARGET` 仅用于开发代理。前端通过 `VITE_API_BASE_URL` 设置浏览器 API 前缀（默认 `/api`），见 `frontend/.env.example`。更改后重新启动开发服务/构建。直接跨域访问时同步修改 Go 的 CORS_ORIGINS。
+成功返回 `201` 和完整问题：`id/title/description/priority/status/position/createdAt/updatedAt`。ID 和 UTC 时间由服务生成，初始状态为 `open`。优先级为 `low/medium/high`，标题去空白后必填（最多 600 字节），描述可选（最多 12000 字节），坐标必须全部为数值，零有效。请求上限 64 KiB。
 
-后端测试与前端构建：
+用户名为 3～32 位，以英文字母开头，可含数字、下划线、点、横线；不区分大小写。创建用户时 `role` 只能为 `user` 或 `admin`，不能创建第二个超级管理员。
+
+错误统一返回 `{"error":{"code":"...","message":"..."}}`：参数错误 `400`、未登录 `401`、权限不足 `403`、不存在 `404`、用户名冲突 `409`、数据库错误 `500`。前端保留失败操作之前的状态并提供错误提示。
+
+## Unity Android
+
+前后端在服务器运行；Windows 负责 Unity/Android 开发和设备测试。当前 Unity 源码与资源来自 `unity-android-validation` 的 `4017994`，使用 Unity **2022.3.62f3c1**、AR Foundation/ARCore **5.2.0**、XR Management **4.5.0**、Input System **1.14.0**、URP **14.0.12**。
+
+使用 Unity Hub 打开 `unity/`，等待包解析和编译，手动执行 **Inspection → Setup Project**，打开 `Assets/Scenes/Inspection.unity`。输入模式为 **Input System Package (New)**。场景、Prefab 和 `.meta` 已纳入源码；仓库副本仍需在安装 Unity 的机器上完成独立导入验证。
+
+| 构建菜单 | 产物 | 用途 |
+| --- | --- | --- |
+| Inspection → Build Android Development APK | `Builds/inspection-dev.apk` | ARM64 手机，ARCore 真实平面检测 |
+| Inspection → Build x86_64 Simulation APK | `Builds/inspection-x86-simulation.apk` | x86_64 AVD，虚拟地面与表单流程测试 |
+
+模拟版具有独立包名和明确的模拟标识，不提供真实 AR。两个版本提交同一问题结构，无需登录；当前服务器无需为新版登录系统重新构建 Unity APK。
+
+运行时选择 API 地址“默认”或“自定义”：默认读取 `Assets/Resources/api-config.txt` 并隐藏输入框；自定义显示输入框，地址及选项保存到 PlayerPrefs。仓库默认使用本地开发地址，实际设备填写 `http://${HOST}:${PORT}/api`。手机中的 localhost 指手机自己，配置后先在浏览器访问对应 `/health` 检查网络。
+
+开发构建允许 HTTP。实际平面检测、相机权限、触摸防误放置和字体显示需要在支持 ARCore 的真机上验证；AVD 虚拟地面不能替代真机验收。坐标属于当前 AR 会话或模拟测试场景，不支持跨会话物理位置恢复。已交付 APK 信息与 Windows 接手位置见 [Unity 交接说明](docs/handoff.md)。
+
+## 验证
 
 ```bash
-cd /home/skk/go_project/p1/backend
+cd backend
 go test -race ./...
 go vet ./...
 cd ../frontend
 npm run build
 ```
 
-浏览器检查需要本机已安装 Chromium/Chrome：
+安装 Chrome/Chromium 与 Caddy 后，可在项目根目录运行：
 
 ```bash
-cd /home/skk/go_project/p1
 CHROME_PATH=/完整路径/chrome node scripts/browser-smoke.mjs
 ```
 
-脚本自建独立数据与测试进程，检查空列表、状态修改、重启保留、失败恢复、移动布局和真实 CORS。默认端口 18080、15175；占用时通过 `SMOKE_API_PORT`、`SMOKE_WEB_PORT` 调整。截图生成在 `.cache/browser/`，只使用测试数据，不连接部署环境。
-
-## Unity 打开、模拟与构建
-
-1. 用 Unity Hub 安装 **2022.3.62f1 LTS**，勾选 Android Build Support、SDK/NDK Tools、OpenJDK。打开本仓库 `unity/` 目录，不要另建外层工程。先等待 Package Manager 解析包和脚本编译。
-2. 首次打开，`ProjectSetup` 自动生成 `Assets/Scenes/Inspection.unity`、Marker/Plane Prefab、PriorityDropdown UI 资源及 XR 配置；也可执行菜单 **Inspection → Setup Project**。该操作保留已有场景，不重建用户修改的场景。设置 Input Handling 为 Both 后，若 Editor 提示重启，完成重启再继续；检查 Project Settings → Player → Active Input Handling 确为 Both。
-3. 确认 Project Settings → XR Plug-in Management：Standalone 启用 XR Simulation，Android 启用 ARCore。生成器为 Android 配置 ARM64、IL2CPP、OpenGLES3、最低 API 24、竖屏、网络权限、AR Required，Depth Optional。运行 XR Project Validation 并处理实际 Editor/SDK 报错。
-4. 打开 `Assets/Scenes/Inspection.unity`，Game 视图用竖屏比例如 720×1280。按 [Unity XR Simulation 5.1 文档](https://docs.unity3d.com/Packages/com.unity.xr.arfoundation@5.1/manual/xr-simulation/simulation.html) 选择包自带/导入的模拟环境；进入 Play，移动模拟相机观察水平面。鼠标右键配合 WASD 用于视角导航，在表单外左键放置标记。UI 显示“Editor 模拟验证”。
-5. 上方显示 AR 状态；检测的平面显示为绿色，点击后放置 10 cm 橙色方块。表单填写标题、描述与优先级后提交。一次编辑一个标记，再点平面移动；点击 UI 不触发 AR 放置。成功清空并销毁当前标记；失败保留。坐标取标记根节点的世界坐标（米）。
-6. **后端地址在运行中的表单首行直接填写**，将保存到 PlayerPrefs，覆盖默认值；也可修改 `Assets/Resources/api-config.txt` 后重新构建（按部署环境填写 `http://${HOST}:${PORT}/api`）。Editor 可用 `http://127.0.0.1:8080`；手机需用电脑可达的局域网 IP 或公网 `https://域名/api`，手机的 localhost 指手机自己。先用手机浏览器访问对应 `/health` 验证网络。
-7. 获得官方支持的 ARCore 真机后，开启 USB 调试，安装/更新 Google Play Services for AR；切换 Build Target 到 Android，执行 **Inspection → Build Android Development APK**。构建产物 `unity/Builds/inspection-dev.apk`。也可批处理 `Unity -batchmode -quit -projectPath /完整路径/p1/unity -buildTarget Android -executeMethod ProjectSetup.BuildAndroid -logFile /日志路径`。打开相机权限并完成真机检查。
-8. 开发 APK 允许 HTTP；非 Development 构建应使用 HTTPS。模拟器不能代替真机相机、传感器、权限和触摸验收。完成首次生成后，提交场景、Prefab、XR 配置及全部 `.meta`，忽略 Library/Temp/Logs/Builds。
-
-[Google 的 Android Emulator 说明](https://developers.google.com/ar/develop/java/emulator) 要求 x86 系列模拟器。已下载检查本项目锁定的 ARCore 5.1.6 包：`UnityARCore.aar` 与 `ARPresto.aar` 原生库只包含 ARM，不能直接安装此 ARM64 构建在标准 x86 ARCore 模拟器上。当前开发路径因此选 Editor XR Simulation；它也尚需有 Unity Editor 的电脑实际运行。Android Studio 本身不替代 Unity。
-
-## API
-
-内部路径如下；公网同域代理时加 `/api` 前缀。
-
-| 方法 | 路径 | 请求 | 成功响应 |
-| --- | --- | --- | --- |
-| GET | /health | 无 | 200 `{"status":"ok"}` |
-| GET | /issues | 无 | 200 问题数组，初始为 `[]` |
-| POST | /issues | title、description、priority、position | 201 完整问题 |
-| PATCH | /issues/{id}/status | `{"status":"resolved"}` | 200 更新后的问题 |
-
-从任意终端测试默认本地 Go：
-
-```bash
-curl http://127.0.0.1:8080/health
-curl -X POST http://127.0.0.1:8080/issues \
-  -H 'Content-Type: application/json' \
-  -d '{"title":"入口墙面破损","description":"左侧墙体存在裂缝","priority":"high","position":{"x":0.42,"y":0.03,"z":1.26}}'
-curl http://127.0.0.1:8080/issues
-# 将下面的实际ID替换为 POST 返回的 id
-curl -X PATCH http://127.0.0.1:8080/issues/实际ID/status \
-  -H 'Content-Type: application/json' -d '{"status":"resolved"}'
-```
-
-返回的完整对象包含 `id/title/description/priority/status/position/createdAt/updatedAt`。ID 由 Go 生成；创建状态固定 `open`；时间为 UTC RFC3339Nano。更新状态保留其他字段，仅更新 status/updatedAt。
-
-校验：title 去空白后非空，description 可选，priority 为 low/medium/high，status 为 open/in_progress/resolved。position 的 x/y/z 必须全部提供数值，零有效，缺失/null/非数值无效。创建不接受 id/status/时间等额外字段；请求上限 64 KiB。非法 JSON 或参数返回 400，问题不存在返回 404，保存失败返回 500。错误示例：
-
-```json
-{"error":{"code":"INVALID_ARGUMENT","message":"title 不能为空"}}
-```
-
-## 持久化、部署与限制
-
-JSON 文件首次写入时创建，写入同目录临时文件后同步并重命名，成功后才替换内存。损坏数据在启动时明确报错并拒绝覆盖；写入失败不返回成功。设计为**单个 Go 进程**，不能让多个服务实例共享一个 JSON 文件。数据路径不是相对于可执行文件；重启及重新部署必须保持 DATA_FILE 不变。
-
-`deploy/.env` 已配置当前服务器 ${PORT} 端口；修改后需重启本项目进程生效。部署和服务环境的具体用法见 [deploy/README.md](deploy/README.md)。
-
-AR 坐标只在当前会话有意义，不提供跨设备、跨会话定位或历史标记恢复。未增加登录权限。创建请求没有幂等键或自动重试；网络响应丢失时有重复建单的可能，Unity 提示先查管理端再手动重试。中文字体使用系统动态字体，仍需在目标 Android 设备检查显示效果及安全区。当前没有实际 Unity 运行和真机视频的完成证据；HTTP 部署的实际验证结果见验收记录。
+脚本使用独立 SQLite 数据和测试端口，验证登录、角色、用户创建、密码修改、问题接口、状态更新、重启持久化、后端失败恢复及 Caddy 路由。默认测试端口为 18080、15175，可用 `SMOKE_API_PORT`、`SMOKE_WEB_PORT` 修改；不会修改部署数据库。

@@ -18,3 +18,9 @@ __pycache__/
 
 # 部署截图包含环境信息，仅保留本地。
 /docs/screenshots/deployed-*.png
+# SQLite 运行数据与 WAL/共享内存文件
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3

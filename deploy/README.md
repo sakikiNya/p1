@@ -1,40 +1,42 @@
-# 当前服务器部署：HTTP ${PORT}
+# HTTP 部署
 
-本项目在当前服务器 `/home/skk/go_project/p1` 中运行。Go 同时提供构建后的 React 页面和 `/api/*` 接口，监听 `0.0.0.0:${PORT}`，暂不使用域名和 TLS。
+## 网络结构
 
-`${HOST}` 为服务器公网 IP 或域名，`${PORT}` 为监听端口（以部署配置为准）。将下列占位符替换为实际值后访问；Unity 输入框需填写替换后的完整地址。
+```text
+浏览器 / Unity → http://${HOST}:${PORT}
+                     Caddy
+                     ├── /api/* → Go（回环监听，移除 /api 前缀）→ SQLite
+                     └── /*     → React 构建产物
+```
 
-- 管理页面：`http://${HOST}:${PORT}/`
-- 健康检查：`http://${HOST}:${PORT}/api/health`
-- Unity 后端地址：`http://${HOST}:${PORT}/api`
+当前不使用域名和 TLS。Caddyfile 显式设置 HTTP 地址并关闭自动 HTTPS；`admin off` 避免占用系统其他 Caddy 的管理端口。此配置作为独立进程运行，不直接覆盖系统 Caddyfile。
 
-`0.0.0.0` 表示监听所有 IPv4 网卡；它不是应填入手机的服务器地址。
+## 运行
 
-## 配置与运维
-
-实际配置文件 `deploy/.env` 已创建并被 Git 忽略，模板见 `.env.example`。管理脚本直接解析键值，不执行文件中的 shell 命令。当前 DATA_FILE 固定到 `backend/data/issues.json`；FRONTEND_DIR 指向构建产物目录。
+1. 安装 Caddy 2、Go、Node.js/npm。
+2. 在项目根目录复制 `deploy/.env.example` 为 `deploy/.env`，填写端口、数据路径及 `ADMIN_PASSWORD`。`API_UPSTREAM` 与 `LISTEN_ADDR` 必须一致，Go 使用回环地址，Caddy 使用对外网卡。
+3. 执行 `bash scripts/build-release.sh`，再执行 `python3 scripts/server.py start`。
+4. 打开 `http://${HOST}:${PORT}/api/health` 和首页。通过 Admin 登录并创建所需账号。
 
 ```bash
-cd /home/skk/go_project/p1
-bash scripts/build-release.sh
-python3 scripts/server.py start
 python3 scripts/server.py status
-# 更新源码并重新构建后，通过 restart 运行新产物
 python3 scripts/server.py restart
-# 暂时关闭
 python3 scripts/server.py stop
 ```
 
-脚本只管理本项目运行目录中的二进制进程，日志 `.cache/server/server.log`，PID `.cache/server/server.pid`。每次启动复制发布二进制到独立运行目录，构建不会覆盖正在运行的二进制。数据文件不属于发布产物，重启保留。
+脚本读取 `.env` 但不展开 shell 变量。首次初始化失败时不会设置一个公开的默认密码。更新 `.env` 后通过 restart 生效；已有 Admin 的密码只能通过登录后的修改密码流程更换。
 
-这是普通后台进程，**尚未配置开机自启**。在普通服务器终端执行上述命令即可；Codex 沙箱会回收后台子进程，需在沙箱外启动才能持续服务。
+- 数据库：由 DB_FILE 指定，不随构建产物覆盖。
+- 日志：`.cache/server/server.log`、`.cache/server/caddy.log`。
+- PID：`.cache/server/server.pid`、`.cache/server/caddy.pid`。
+- 配置校验：在相同环境变量下执行 `caddy validate --config deploy/Caddyfile`；启动脚本会自动校验。
 
-`FRONTEND_DIR` 非空时管理页面位于 `/`，API 使用 `/api/health`、`/api/issues` 等地址。同域网页无需额外 CORS 配置；开发期直接跨域访问时在 CORS_ORIGINS 中加入前端实际来源。
+如从旧直连 Go 部署切换，先停止原项目进程以释放对外端口，再启动新配置。旧 JSON 路径放入 LEGACY_JSON_FILE，一次迁移后原文件保留。不要让旧 JSON 服务和新 SQLite 服务同时接收现场上报。
 
-当前本机、内网验证已通过，用户也已实际验证公网地址可访问。UFW 为 inactive；服务器自身回访公网 IP 曾超时，外部访问结果以用户验证为准。
+## 长期运行
 
-公网访问还取决于主机防火墙和云安全组是否允许 TCP ${PORT}；本项目启动脚本不自动修改全局防火墙。当前使用临时 HTTP，Unity 的 Development APK 已配置允许 HTTP；非开发构建需调整平台配置或后续使用 HTTPS。
+仓库中的 `inspection.service` 和 `inspection-caddy.service` 为 Linux systemd 模板，默认目录 `/srv/inspection`，需按实际目录、运行用户和 Caddy 路径调整。API 的 `backend.env` 使用 `backend.env.example`；Caddy 的 `caddy.env` 填写 PORT、BIND_HOST、API_UPSTREAM、FRONTEND_DIR。Caddy 的静态资源目录使用绝对路径。
 
-## 后续域名方案
+安装前确认现有站点和端口。运行用户需能写数据库目录，Caddy 需能读取前端目录。API 服务重启不会改变 SQLite 数据或有效会话。普通后台脚本和 systemd 二选一管理同一实例，避免端口冲突。
 
-`Caddyfile`、`inspection.service` 和 `backend.env.example` 保留为后续域名 + HTTPS + systemd 部署模板，当前运行不使用它们。启用时须按实际目录调整：原模板默认 `/srv/inspection`。Go 改为回环监听，由 Caddy 托管页面并转发 `/api/*`；不要覆盖已有站点或删除数据目录。
+HTTP 的 COOKIE_SECURE=false；以后启用 HTTPS 时设为 true，并调整 Caddy 地址。用户管理有后端权限校验，问题 API 按需求开放。

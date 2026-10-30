@@ -2,7 +2,7 @@
 set -euo pipefail
 cd -- "$(dirname -- "$0")/.."
 mkdir -p .cache/release
-(cd backend && GOCACHE="$PWD/../.cache/go-build" CGO_ENABLED=0 GOOS="${TARGET_OS:-linux}" GOARCH="${TARGET_ARCH:-amd64}" go build -trimpath -o ../.cache/release/inspection .)
+(cd backend && GOCACHE="$PWD/../.cache/go-build" GOMODCACHE="$PWD/../.cache/gomod" GOPATH="$PWD/../.cache/gopath" CGO_ENABLED=0 GOOS="${TARGET_OS:-linux}" GOARCH="${TARGET_ARCH:-amd64}" go build -trimpath -o ../.cache/release/inspection .)
 (cd frontend && npm ci --cache "$PWD/../.cache/npm" && npm run build)
 mkdir -p .cache/release/frontend
 cp -R frontend/dist/. .cache/release/frontend/

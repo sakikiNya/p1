@@ -22,11 +22,12 @@ func request(h http.Handler, method, path, body string) *httptest.ResponseRecord
 const payload = `{"title":" 墙面破损 ","description":"裂缝","priority":"high","position":{"x":0,"y":0.03,"z":1.26}}`
 
 func TestLifecycleAndReload(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "data", "issues.json")
+	path := filepath.Join(t.TempDir(), "data", "inspection.db")
 	s, err := openStore(path)
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { s.db.Close() })
 	h := handler(s, "http://localhost:5173")
 	if w := request(h, "GET", "/issues", ""); strings.TrimSpace(w.Body.String()) != "[]" {
 		t.Fatal(w.Body.String())
@@ -57,12 +58,15 @@ func TestLifecycleAndReload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(reloaded.issues) != 1 || reloaded.issues[0].Status != "resolved" || reloaded.issues[0].ID != issue.ID {
-		t.Fatal(reloaded.issues)
+	defer reloaded.db.Close()
+	issues, err := reloaded.listIssues()
+	if err != nil || len(issues) != 1 || issues[0].Status != "resolved" || issues[0].ID != issue.ID {
+		t.Fatal(issues, err)
 	}
 }
 func TestInvalidInputsAndCORS(t *testing.T) {
-	s, _ := openStore(filepath.Join(t.TempDir(), "issues.json"))
+	s, _ := openStore(filepath.Join(t.TempDir(), "inspection.db"))
+	t.Cleanup(func() { s.db.Close() })
 	h := handler(s, "http://localhost:5173")
 	for _, body := range []string{
 		`{}`, `null`, `{`, payload + `{}`, strings.Replace(payload, "墙面破损", "   ", 1), strings.Replace(payload, `"high"`, `"urgent"`, 1),
@@ -97,44 +101,80 @@ func TestInvalidInputsAndCORS(t *testing.T) {
 		t.Fatal(w.Code)
 	}
 }
-func TestSaveFailureKeepsMemoryAndFile(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "issues.json")
-	s, _ := openStore(path)
+func TestWriteFailureDoesNotReportSuccess(t *testing.T) {
+	s, err := openStore(filepath.Join(t.TempDir(), "inspection.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.db.Close()
 	h := handler(s, "")
-	if w := request(h, "POST", "/issues", payload); w.Code != 201 {
+	w := request(h, "POST", "/issues", payload)
+	if w.Code != 201 {
 		t.Fatal(w.Body.String())
 	}
-	original, _ := os.ReadFile(path)
-	id := s.issues[0].ID
-	// A regular file used as the parent directory produces a deterministic write failure, even as root.
-	s.path = filepath.Join(path, "blocked.json")
-	for _, op := range []struct{ method, path, body string }{{"POST", "/issues", payload}, {"PATCH", "/issues/" + id + "/status", `{"status":"resolved"}`}} {
-		if w := request(h, op.method, op.path, op.body); w.Code != 500 {
-			t.Fatal(w.Code)
-		}
+	var issue Issue
+	json.Unmarshal(w.Body.Bytes(), &issue)
+	if _, err = s.db.Exec(`PRAGMA query_only=ON`); err != nil {
+		t.Fatal(err)
 	}
-	after, _ := os.ReadFile(path)
-	if string(original) != string(after) || len(s.issues) != 1 || s.issues[0].Status != "open" {
-		t.Fatal("failed write altered data")
+	if w = request(h, "POST", "/issues", payload); w.Code != 500 {
+		t.Fatal(w.Code)
+	}
+	if w = request(h, "PATCH", "/issues/"+issue.ID+"/status", `{"status":"resolved"}`); w.Code != 500 {
+		t.Fatal(w.Code)
+	}
+	issues, err := s.listIssues()
+	if err != nil || len(issues) != 1 || issues[0].Status != "open" {
+		t.Fatal(issues, err)
 	}
 }
-func TestCorruptFileRejected(t *testing.T) {
+func TestJSONImportAtomicAndIdempotent(t *testing.T) {
+	s, _ := openStore(filepath.Join(t.TempDir(), "inspection.db"))
+	defer s.db.Close()
+	h := handler(s, "")
+	w := request(h, "POST", "/issues", payload)
+	var issue Issue
+	json.Unmarshal(w.Body.Bytes(), &issue)
+	legacy, _ := json.Marshal([]Issue{issue})
 	path := filepath.Join(t.TempDir(), "issues.json")
-	for _, data := range []string{"{", "null", `[{"id":"bad"}]`} {
-		os.WriteFile(path, []byte(data), 0600)
-		if _, err := openStore(path); err == nil {
-			t.Fatal("accepted", data)
+	os.WriteFile(path, legacy, 0600)
+	target, _ := openStore(filepath.Join(t.TempDir(), "inspection.db"))
+	defer target.db.Close()
+	if err := target.importJSON(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := target.updateStatus(issue.ID, "resolved"); err != nil {
+		t.Fatal(err)
+	}
+	if err := target.importJSON(path); err != nil {
+		t.Fatal(err)
+	}
+	issues, _ := target.listIssues()
+	if len(issues) != 1 || issues[0].Status != "resolved" {
+		t.Fatal(issues)
+	}
+	b, _ := os.ReadFile(path)
+	if string(b) != string(legacy) {
+		t.Fatal("modified legacy file")
+	}
+	duplicate := "[" + strings.TrimSpace(w.Body.String()) + "," + strings.TrimSpace(w.Body.String()) + "]"
+	for _, bad := range []string{"{", "null", `[{"id":"invalid"}]`, duplicate} {
+		temp, _ := openStore(filepath.Join(t.TempDir(), "inspection.db"))
+		os.WriteFile(path, []byte(bad), 0600)
+		if err := temp.importJSON(path); err == nil {
+			t.Fatal("accepted invalid import")
 		}
-		b, _ := os.ReadFile(path)
-		if string(b) != data {
-			t.Fatal("overwritten")
+		got, _ := temp.listIssues()
+		if len(got) != 0 {
+			t.Fatal("partial import")
 		}
+		temp.db.Close()
 	}
 }
 func TestConcurrentCreates(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "issues.json")
+	path := filepath.Join(t.TempDir(), "inspection.db")
 	s, _ := openStore(path)
+	t.Cleanup(func() { s.db.Close() })
 	h := handler(s, "")
 	var wg sync.WaitGroup
 	for i := 0; i < 20; i++ {
@@ -148,8 +188,13 @@ func TestConcurrentCreates(t *testing.T) {
 	}
 	wg.Wait()
 	loaded, err := openStore(path)
-	if err != nil || len(loaded.issues) != 20 {
-		t.Fatal(err, len(s.issues))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer loaded.db.Close()
+	issues, err := loaded.listIssues()
+	if err != nil || len(issues) != 20 {
+		t.Fatal(err, len(issues))
 	}
 }
 
@@ -158,7 +203,7 @@ func TestSiteHandler(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<html>inspection admin</html>"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	s, _ := openStore(filepath.Join(t.TempDir(), "issues.json"))
+	s, _ := openStore(filepath.Join(t.TempDir(), "inspection.db"))
 	h := siteHandler(handler(s, "http://localhost:5173"), dir)
 	if w := request(h, "GET", "/", ""); w.Code != 200 || !strings.Contains(w.Body.String(), "inspection admin") {
 		t.Fatal(w.Code, w.Body.String())

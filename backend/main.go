@@ -2,17 +2,16 @@ package main
 
 import (
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -31,72 +30,15 @@ type Issue struct {
 	CreatedAt   string   `json:"createdAt"`
 	UpdatedAt   string   `json:"updatedAt"`
 }
-type store struct {
-	mu     sync.Mutex
-	path   string
-	issues []Issue
-}
 
 func validPriority(v string) bool { return v == "low" || v == "medium" || v == "high" }
 func validStatus(v string) bool   { return v == "open" || v == "in_progress" || v == "resolved" }
-
-func openStore(path string) (*store, error) {
-	s := &store{path: path, issues: []Issue{}}
-	b, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return s, nil
+func newID() string {
+	var raw [32]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		panic(err)
 	}
-	if err != nil {
-		return nil, err
-	}
-	if err = json.Unmarshal(b, &s.issues); err != nil {
-		return nil, fmt.Errorf("数据文件损坏，拒绝覆盖: %w", err)
-	}
-	if s.issues == nil {
-		return nil, errors.New("数据文件必须是 JSON 数组")
-	}
-	ids := map[string]bool{}
-	for _, issue := range s.issues {
-		_, cErr := time.Parse(time.RFC3339Nano, issue.CreatedAt)
-		_, uErr := time.Parse(time.RFC3339Nano, issue.UpdatedAt)
-		if issue.ID == "" || ids[issue.ID] || strings.TrimSpace(issue.Title) == "" || !validPriority(issue.Priority) || !validStatus(issue.Status) || cErr != nil || uErr != nil {
-			return nil, errors.New("数据文件包含无效问题，拒绝覆盖")
-		}
-		ids[issue.ID] = true
-	}
-	return s, nil
-}
-
-// Caller holds mu. Commit to disk before publishing the new in-memory snapshot.
-func (s *store) save(next []Issue) error {
-	if err := os.MkdirAll(filepath.Dir(s.path), 0750); err != nil {
-		return err
-	}
-	b, err := json.MarshalIndent(next, "", "  ")
-	if err != nil {
-		return err
-	}
-	f, err := os.CreateTemp(filepath.Dir(s.path), ".issues-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(f.Name())
-	if _, err = f.Write(b); err != nil {
-		f.Close()
-		return err
-	}
-	if err = f.Sync(); err != nil {
-		f.Close()
-		return err
-	}
-	if err = f.Close(); err != nil {
-		return err
-	}
-	if err = os.Rename(f.Name(), s.path); err != nil {
-		return err
-	}
-	s.issues = next
-	return nil
+	return hex.EncodeToString(raw[:])
 }
 
 func respond(w http.ResponseWriter, status int, data any) {
@@ -124,11 +66,21 @@ func decode(w http.ResponseWriter, r *http.Request, out any) bool {
 
 func handler(s *store, origins string) http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) { respond(w, 200, map[string]string{"status": "ok"}) })
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+		if err := s.db.PingContext(r.Context()); err != nil {
+			fail(w, 503, "UNAVAILABLE", "数据库不可用")
+			return
+		}
+		respond(w, 200, map[string]string{"status": "ok"})
+	})
+	authRoutes(mux, s)
 	mux.HandleFunc("GET /issues", func(w http.ResponseWriter, r *http.Request) {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		respond(w, 200, s.issues)
+		issues, err := s.listIssues()
+		if err != nil {
+			fail(w, 500, "PERSISTENCE_ERROR", "读取问题失败")
+			return
+		}
+		respond(w, 200, issues)
 	})
 	mux.HandleFunc("POST /issues", func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
@@ -149,6 +101,10 @@ func handler(s *store, origins string) http.Handler {
 		switch {
 		case input.Title == "":
 			message = "title 不能为空"
+		case len(input.Title) > 600:
+			message = "title 不能超过 600 字节"
+		case len(input.Description) > 12000:
+			message = "description 不能超过 12000 字节"
 		case !validPriority(input.Priority):
 			message = "priority 必须是 low、medium 或 high"
 		case input.Position == nil:
@@ -160,32 +116,10 @@ func handler(s *store, origins string) http.Handler {
 			fail(w, 400, "INVALID_ARGUMENT", message)
 			return
 		}
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		var id string
-		for {
-			var raw [16]byte
-			if _, err := rand.Read(raw[:]); err != nil {
-				fail(w, 500, "INTERNAL", "无法生成 ID")
-				return
-			}
-			id = hex.EncodeToString(raw[:])
-			found := false
-			for _, issue := range s.issues {
-				if issue.ID == id {
-					found = true
-					break
-				}
-			}
-			if !found {
-				break
-			}
-		}
 		now := time.Now().UTC().Format(time.RFC3339Nano)
-		issue := Issue{ID: id, Title: input.Title, Description: input.Description, Priority: input.Priority, Status: "open", Position: Position{*input.Position.X, *input.Position.Y, *input.Position.Z}, CreatedAt: now, UpdatedAt: now}
-		next := append(append([]Issue{}, s.issues...), issue)
-		if err := s.save(next); err != nil {
-			log.Printf("save: %v", err)
+		issue := Issue{ID: newID(), Title: input.Title, Description: input.Description, Priority: input.Priority, Status: "open", Position: Position{*input.Position.X, *input.Position.Y, *input.Position.Z}, CreatedAt: now, UpdatedAt: now}
+		if err := s.createIssue(issue); err != nil {
+			log.Printf("create issue: %v", err)
 			fail(w, 500, "PERSISTENCE_ERROR", "保存失败，请检查服务端日志")
 			return
 		}
@@ -202,24 +136,17 @@ func handler(s *store, origins string) http.Handler {
 			fail(w, 400, "INVALID_ARGUMENT", "status 必须是 open、in_progress 或 resolved")
 			return
 		}
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		for i, issue := range s.issues {
-			if issue.ID != r.PathValue("id") {
-				continue
-			}
-			next := append([]Issue{}, s.issues...)
-			next[i].Status = input.Status
-			next[i].UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-			if err := s.save(next); err != nil {
-				log.Printf("save: %v", err)
-				fail(w, 500, "PERSISTENCE_ERROR", "保存失败，请检查服务端日志")
-				return
-			}
-			respond(w, 200, next[i])
+		issue, err := s.updateStatus(r.PathValue("id"), input.Status)
+		if errors.Is(err, sql.ErrNoRows) {
+			fail(w, 404, "NOT_FOUND", "问题不存在")
 			return
 		}
-		fail(w, 404, "NOT_FOUND", "问题不存在")
+		if err != nil {
+			log.Printf("update issue: %v", err)
+			fail(w, 500, "PERSISTENCE_ERROR", "保存失败，请检查服务端日志")
+			return
+		}
+		respond(w, 200, issue)
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { fail(w, 404, "NOT_FOUND", "接口不存在") })
 	allowed := map[string]bool{}
@@ -228,11 +155,22 @@ func handler(s *store, origins string) http.Handler {
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add("Vary", "Origin")
+		w.Header().Set("Cache-Control", "no-store")
 		origin := r.Header.Get("Origin")
 		if origin != "" && allowed[origin] {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		}
+		// Cookie-authenticated operations reject untrusted browser origins.
+		protected := strings.HasPrefix(r.URL.Path, "/auth/") || r.URL.Path == "/users"
+		if protected && r.Method != "GET" && r.Method != "HEAD" && r.Method != "OPTIONS" && origin != "" {
+			sameHost := origin == "http://"+r.Host || origin == "https://"+r.Host
+			if !sameHost && !allowed[origin] {
+				fail(w, 403, "ORIGIN_DENIED", "来源未获允许")
+				return
+			}
 		}
 		if r.Method == http.MethodOptions {
 			if origin != "" && !allowed[origin] {
@@ -265,12 +203,19 @@ func siteHandler(api http.Handler, frontendDir string) http.Handler {
 }
 
 func main() {
-	path, err := filepath.Abs(env("DATA_FILE", "data/issues.json"))
+	path, err := filepath.Abs(env("DB_FILE", "data/inspection.db"))
 	if err != nil {
 		log.Fatal(err)
 	}
 	s, err := openStore(path)
 	if err != nil {
+		log.Fatal(err)
+	}
+	defer s.db.Close()
+	if err = s.importJSON(os.Getenv("LEGACY_JSON_FILE")); err != nil {
+		log.Fatal(err)
+	}
+	if err = s.bootstrapAdmin(os.Getenv("ADMIN_PASSWORD")); err != nil {
 		log.Fatal(err)
 	}
 	addr := env("LISTEN_ADDR", "0.0.0.0:8080")

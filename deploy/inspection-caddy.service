@@ -1,0 +1,19 @@
+[Unit]
+Description=Park inspection HTTP frontend
+After=network.target inspection.service
+Wants=inspection.service
+
+[Service]
+Type=simple
+User=inspection
+Group=inspection
+WorkingDirectory=/srv/inspection
+EnvironmentFile=/srv/inspection/caddy.env
+ExecStart=/usr/local/bin/caddy run --config /srv/inspection/Caddyfile
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

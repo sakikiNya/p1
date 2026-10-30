@@ -1,11 +1,25 @@
-# 环境变量 DOMAIN 必须设置为实际域名；站点根目录放 React dist 中的内容。
-{$DOMAIN} {
-    handle_path /api/* {
-        reverse_proxy 127.0.0.1:8080
-    }
-    handle {
-        root * /srv/inspection/frontend
-        try_files {path} /index.html
-        file_server
-    }
+{
+	admin off
+	auto_https off
+}
+
+http://:{$PORT:8080} {
+	bind {$BIND_HOST:0.0.0.0}
+	root * {$FRONTEND_DIR:./frontend/dist}
+	encode zstd gzip
+
+	handle_path /api/* {
+		reverse_proxy {$API_UPSTREAM:127.0.0.1:18081}
+	}
+
+	handle /assets/* {
+		header Cache-Control "public, max-age=31536000, immutable"
+		file_server
+	}
+
+	handle {
+		header Cache-Control "no-cache"
+		try_files {path} /index.html
+		file_server
+	}
 }
