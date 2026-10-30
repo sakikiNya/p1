@@ -12,16 +12,9 @@ using UnityEngine.XR.Management;
 
 // Generates serialized Unity assets with the installed Editor instead of hand-writing
 // version-dependent scene/prefab YAML. Safe to rerun; existing scenes are preserved.
-[InitializeOnLoad]
 public static class ProjectSetup
 {
     const string ScenePath = "Assets/Scenes/Inspection.unity";
-    static ProjectSetup()
-    {
-        EditorApplication.delayCall += () => {
-            if (!Application.isBatchMode && !File.Exists(ScenePath)) Setup();
-        };
-    }
     [MenuItem("Inspection/Setup Project")]
     public static void Setup()
     {
@@ -48,9 +41,10 @@ public static class ProjectSetup
         PlayerSettings.insecureHttpOption = InsecureHttpOption.DevelopmentOnly;
         PlayerSettings.defaultInterfaceOrientation = UIOrientation.Portrait;
         PlayerSettings.stripEngineCode = false;
-        // Both: legacy touch/UI plus Input System required by XR Simulation.
+        // Use the Input System for touch, UI and XR Simulation.
         var player = new SerializedObject(AssetDatabase.LoadAllAssetsAtPath("ProjectSettings/ProjectSettings.asset")[0]);
-        var input = player.FindProperty("activeInputHandler"); if (input != null) { input.intValue = 2; player.ApplyModifiedProperties(); }
+        var input = player.FindProperty("activeInputHandler"); if (input != null) { input.intValue = 1; player.ApplyModifiedProperties(); }
+        var gradleSettings = player.FindProperty("useCustomGradleSettingsTemplate"); if (gradleSettings != null) { gradleSettings.boolValue = true; player.ApplyModifiedProperties(); }
         if (!File.Exists("Assets/Resources/PriorityDropdown.prefab"))
         {
             var dropdown = DefaultControls.CreateDropdown(new DefaultControls.Resources());
@@ -109,5 +103,51 @@ public static class ProjectSetup
         Setup(); Directory.CreateDirectory("Builds");
         var report = BuildPipeline.BuildPlayer(new BuildPlayerOptions { scenes = new[]{ScenePath}, locationPathName="Builds/inspection-dev.apk", target=BuildTarget.Android, options=BuildOptions.Development });
         if (report.summary.result != UnityEditor.Build.Reporting.BuildResult.Succeeded) throw new Exception("Android build failed: " + report.summary.result);
+    }
+    [MenuItem("Inspection/Build x86_64 Simulation APK")]
+    public static void BuildSimulation()
+    {
+        Setup();
+        SimulationMaterial("SimulationGround", new Color(.22f,.43f,.39f));
+        SimulationMaterial("SimulationGrid", new Color(.4f,.65f,.59f));
+        SimulationMaterial("SimulationMarker", new Color(1,.35f,.05f));
+        EditorBuildSettings.TryGetConfigObject<XRGeneralSettingsPerBuildTarget>(XRGeneralSettings.k_SettingsKey, out var targets);
+        var settings = targets.SettingsForBuildTarget(BuildTargetGroup.Android);
+        var originalInit = settings.InitManagerOnStart;
+        var originalArch = PlayerSettings.Android.targetArchitectures;
+        var originalId = PlayerSettings.GetApplicationIdentifier(BuildTargetGroup.Android);
+        var originalName = PlayerSettings.productName;
+        try
+        {
+            settings.InitManagerOnStart = false;
+            EditorUtility.SetDirty(settings); AssetDatabase.SaveAssets();
+            PlayerSettings.Android.targetArchitectures = AndroidArchitecture.X86_64;
+            PlayerSettings.SetApplicationIdentifier(BuildTargetGroup.Android, "cn.inspection.prototype.simulation");
+            PlayerSettings.productName = "Inspection Simulation";
+            Directory.CreateDirectory("Builds");
+            var report = BuildPipeline.BuildPlayer(new BuildPlayerOptions {
+                scenes = new[]{ScenePath}, locationPathName = "Builds/inspection-x86-simulation.apk",
+                target = BuildTarget.Android, options = BuildOptions.Development,
+                extraScriptingDefines = new[]{"INSPECTION_SIMULATION"}
+            });
+            if (report.summary.result != UnityEditor.Build.Reporting.BuildResult.Succeeded) throw new Exception("Simulation build failed: " + report.summary.result);
+        }
+        finally
+        {
+            settings.InitManagerOnStart = originalInit;
+            EditorUtility.SetDirty(settings); AssetDatabase.SaveAssets();
+            PlayerSettings.Android.targetArchitectures = originalArch;
+            PlayerSettings.SetApplicationIdentifier(BuildTargetGroup.Android, originalId);
+            PlayerSettings.productName = originalName;
+            AssetDatabase.SaveAssets();
+        }
+    }
+    static void SimulationMaterial(string name, Color color)
+    {
+        var path = "Assets/Resources/" + name + ".mat";
+        if (AssetDatabase.LoadAssetAtPath<Material>(path)) return;
+        var shader = Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Unlit/Color");
+        var material = new Material(shader); material.color = color;
+        AssetDatabase.CreateAsset(material, path);
     }
 }

@@ -1,8 +1,8 @@
 {
   "dependencies": {
-    "com.unity.xr.arfoundation": "5.1.6",
-    "com.unity.xr.arcore": "5.1.6",
-    "com.unity.xr.management": "4.4.0",
+    "com.unity.xr.arfoundation": "5.2.0",
+    "com.unity.xr.arcore": "5.2.0",
+    "com.unity.xr.management": "4.5.0",
     "com.unity.ugui": "1.0.0",
     "com.unity.modules.androidjni": "1.0.0",
     "com.unity.modules.jsonserialize": "1.0.0",
@@ -11,8 +11,9 @@
     "com.unity.modules.unitywebrequestwww": "1.0.0",
     "com.unity.modules.physics": "1.0.0",
     "com.unity.modules.imgui": "1.0.0",
-    "com.unity.inputsystem": "1.7.0",
+    "com.unity.inputsystem": "1.14.0",
     "com.unity.modules.audio": "1.0.0",
-    "com.unity.modules.textrendering": "1.0.0"
+    "com.unity.modules.textrendering": "1.0.0",
+    "com.unity.render-pipelines.universal": "14.0.12"
   }
 }

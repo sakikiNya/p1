@@ -1,162 +1,123 @@
 # 园区巡检问题标注原型
 
-Unity AR 放置标记并上报 → Go 保存 JSON → React 查看问题并更新状态。所有项目文件位于 `/home/skk/go_project/p1`。
+Unity 放置标记并上报 → Go 保存 JSON → React 查看问题并更新状态。状态更新于 **2026-10-30**，需求依据见 [1.md](1.md)，Windows 负责 Unity/Android，Go 与 React 由服务器端处理。逐项证据见 [验收记录](docs/verification.md)，接手步骤见 [交接说明](docs/handoff.md)。
 
-## 当前完成情况
+## 当前交付状态
 
-- Go API、校验、CORS、并发保护、JSON 临时文件替换持久化及关键测试已实现并通过检查。
-- React 列表、优先级/状态/坐标/时间展示、状态保存、空列表、失败提示和重试已实现；构建及实际浏览器联调通过。
-- Unity C# 源码、依赖版本、AR 场景/Prefab/设置生成器已提供。**当前机器没有 Unity Editor、adb 或 ARCore 真机，尚未完成 Unity 导入、编译、XR Simulation 运行、APK 构建和真机验收。** 场景和 Prefab 在 Unity 首次打开时生成，需将生成的资源及 `.meta` 一起纳入最终交付。
-- 当前服务器部署配置已改为 `0.0.0.0:${PORT}`，Go 同时托管页面与 `/api`，运维见 `deploy/README.md`；用户已验证公网可访问，详细证据见 `docs/verification.md`。
-- 两段 3～5 分钟演示视频尚未录制。见 [验收记录](docs/verification.md) 与 [演示脚本](docs/demo.md)。
-
-## 版本
-
-| 部分 | 版本及验证情况 |
+| 部分 | 当前结果 |
 | --- | --- |
-| Go | 实际运行 1.22.2，使用标准库，无第三方 Go 依赖 |
-| Node.js / npm | 实际运行 v24.21.0 / 11.19.0 |
-| React / React DOM | 锁文件解析为 19.3.1 |
-| TypeScript / Vite | 实际构建使用 5.9.3 / 7.3.7 |
-| Unity | 目标 2022.3.62f1 LTS，尚未实际安装/打开 |
-| AR Foundation / ARCore XR Plug-in | 固定 5.1.6 / 5.1.6 |
-| XR Management / Input System | 固定 4.4.0 / 1.7.0 |
-| Android Studio | 用户提供 Rabbit 2 \| 2026.2.2；本机未验证其 SDK/AVD |
+| Go / React | 已实现；此前 Linux 测试、浏览器联调、HTTP 部署及重启持久化验证通过 |
+| Unity 工程 | 已在本机打开、编译、生成场景与 Prefab；使用 Input System，修复 XR Origin 初始化顺序 |
+| ARM64 手机 APK | 最新开发包构建、ABI、内置默认地址和签名检查通过；真机安装及真实 AR 验收待完成 |
+| x86_64 模拟 APK | AVD 安装、启动、虚拟放置、空标题验证及此前上报流程通过；最新包的地址切换和重启记忆通过 |
+| API 地址选择 | 首次使用选中“默认”并隐藏地址；“自定义”显示可编辑输入框，保存选择及自定义地址 |
+| 最终题目验收 | 尚未完成：真实 AR 手机验证、仓库 Unity 副本首次导入、手机及电脑各 3～5 分钟视频 |
 
-`frontend/package-lock.json` 锁定实际前端依赖，使用 `npm ci` 安装。根目录原有 npm 配置保留，不用于启动管理端。Unity 会在首次解析包后生成 `Packages/packages-lock.json`，需保留。
+用户已报告 Android 真机安装兼容提示，尚未获得具体型号、系统版本和完整错误原因。ARM64 包检查通过不能视为该问题已解决。x86_64 模拟版使用普通虚拟平面，坐标只用于流程测试。
 
-## 目录
+## 环境和目录
+
+| 项目 | 实际版本 / 位置 |
+| --- | --- |
+| Windows 仓库 / 分支 | `G:\tmp\project1029\p1` / `unity-android-validation` |
+| 实际 Unity 开发工程 | `D:\Unity\project\My project`；仓库 `unity/` 为同步的源码和资源副本 |
+| Unity / Android Build Support | `2022.3.62f3c1`；Android SDK、NDK、OpenJDK 已安装 |
+| AR Foundation / ARCore | `5.2.0` / `5.2.0` |
+| XR Management / Input System / URP | `4.5.0` / `1.14.0` / `14.0.12` |
+| Android Studio | Rabbit 2 `2026.2.2`，安装于 `D:\AndroidStudio\android-studio` |
+| Android Emulator / AVD | `37.2.12`；`Medium_Phone_API_37.0`，Android 17 / API 37、x86_64 |
+| Android 构建 | IL2CPP、OpenGLES3、最低 API 24；最新 APK target API 35，Development 构建 |
+| 先前 Linux 验证环境 | Go `1.22.2`，Node `24.21.0`，npm `11.19.0` |
+| 前端锁文件版本 | React / React DOM `19.3.1`，TypeScript `5.9.3`，Vite `7.3.7` |
 
 ```text
-backend/       Go 源码、测试；默认运行数据 backend/data/issues.json
-frontend/      React + TypeScript 管理端
-unity/         Unity 项目及场景/Prefab 生成器
-scripts/       构建与浏览器检查脚本
-deploy/        环境模板、Caddy、systemd、部署说明
-docs/          验收证据与演示脚本
-AI_LOG.md      当前可见会话的实际 Prompt 原文
+backend/       Go API 与现有测试，运行数据默认 data/issues.json
+frontend/      React + TypeScript 管理端，依赖由 package-lock.json 锁定
+unity/         同步的 C#、场景、Prefab、.meta 和包版本；独立导入仍待验证
+deploy/        服务器运维说明、环境和后续 HTTPS/systemd 模板
+scripts/       发布构建、服务器管理和浏览器检查脚本
+docs/          验收记录、交接说明、演示脚本与历史截图
+AI_LOG.md      会话指令与采用结果；服务器地址按要求使用占位符
 ```
 
-## 当前服务器访问
+Linux 服务器原部署目录为 `/home/skk/go_project/p1`，与 Windows 本地路径分开使用。仓库 Unity 副本没有经过全新导入验收，不能用本机实际工程成功代替该检查。
 
-下文 `${HOST}` 表示服务器的公网 IP 或域名，`${PORT}` 表示端口（以部署配置为准）。使用命令前先设置：
+## 服务器端：启动 Go 与 React
 
-```bash
-export HOST='你的服务器IP或域名'
-export PORT='你的部署端口'
-```
+**工作分工：Windows 只用于 Unity、Android 构建与 AVD 测试；Go 和 React 的依赖、构建、启动、部署与验收均在服务器端处理。Windows 接手不需要安装或运行前后端。** 以下命令在服务器的两个终端执行，先进入服务器项目目录 `/home/skk/go_project/p1`：
 
-Markdown 中的占位符需自行替换；Unity 地址输入框和 `api-config.txt` 应填写替换后的完整地址，不会展开环境变量。
-
-管理端：`http://${HOST}:${PORT}/`；Unity API：`http://${HOST}:${PORT}/api`。运行配置在 `deploy/.env`，使用 `python3 scripts/server.py start|stop|restart|status` 管理（每次选择一个动作）。这是临时 HTTP 后台进程，未配置开机自启。
-
-## 本地开发：启动 Go 与 React
-
-终端一：
-
-```bash
-cd /home/skk/go_project/p1/backend
+```text
+cd backend
 go run .
 ```
 
-终端二：
-
-```bash
-cd /home/skk/go_project/p1/frontend
+```text
+cd frontend
 npm ci
 npm run dev
 ```
 
-打开终端中显示的地址（默认 `http://localhost:5173`）。Vite 将 `/api` 代理到 `http://127.0.0.1:8080`，两端访问真实 Go 数据。页面不内置问题样例；需要从 Unity 或下面的 curl 创建数据。
+使用 Vite 输出的地址，默认 `http://localhost:5173`。开发代理把 `/api` 转发到 `http://127.0.0.1:8080` 并去掉前缀。根目录原有 npm 配置不用于启动管理端。
 
-Go 配置（进程环境变量）：
-
-| 变量 | 默认值 | 说明 |
+| 配置 | 默认值 | 作用 |
 | --- | --- | --- |
-| LISTEN_ADDR | 0.0.0.0:8080 | 本地开发监听；反向代理部署改为 127.0.0.1:8080 |
-| DATA_FILE | data/issues.json | 相对于 Go 启动目录，重启务必使用同一路径；上线建议绝对路径 |
-| FRONTEND_DIR | 空 | 设置后由 Go 托管 React dist，API 统一位于 /api；当前服务器使用部署环境文件配置 |
-| CORS_ORIGINS | http://localhost:5173,http://127.0.0.1:5173 | 允许的浏览器来源，逗号分隔，不含末尾斜线 |
+| `LISTEN_ADDR` | `0.0.0.0:8080` | Go 监听地址 |
+| `DATA_FILE` | `data/issues.json` | 相对 Go 启动目录；重启时必须保持同一文件 |
+| `FRONTEND_DIR` | 空 | 非空时 Go 托管前端 `/`，API 位于 `/api/*` |
+| `CORS_ORIGINS` | localhost / 127.0.0.1 的 5173 来源 | 逗号分隔的允许来源 |
+| `DEV_API_TARGET` | `http://127.0.0.1:8080` | Vite 开发代理目标 |
+| `VITE_API_BASE_URL` | `/api` | 前端构建时的 API 前缀，见 `frontend/.env.example` |
 
-若端口被占用，不要停止其他服务。例如：
+检查命令：后端目录执行 `go test -cover ./...`、`go vet ./...`；支持 race 工具链的环境执行 `go test -race ./...`。前端目录执行 `npm run build`。浏览器回归脚本为 `scripts/browser-smoke.mjs`，需 Chromium/Chrome，使用独立测试数据；历史执行结果及本轮复查结果以验收记录为准。
 
-```bash
-# Go 终端，在 backend/ 中
-LISTEN_ADDR=0.0.0.0:18080 go run .
-# 前端终端，在 frontend/ 中
-DEV_API_TARGET=http://127.0.0.1:18080 npm run dev -- --port 15173 --strictPort
-```
+## Unity 打开与构建
 
-`DEV_API_TARGET` 仅用于开发代理。前端通过 `VITE_API_BASE_URL` 设置浏览器 API 前缀（默认 `/api`），见 `frontend/.env.example`。更改后重新启动开发服务/构建。直接跨域访问时同步修改 Go 的 CORS_ORIGINS。
+1. 本机继续开发打开 `D:\Unity\project\My project`；从仓库接手时在 Unity Hub 打开 `unity/`。使用上述已验证 Editor，等待包解析与编译；不要混用实际工程和同步副本的 Library。
+2. 执行 **Inspection → Setup Project**。生成器已改为手动调用，不会在首次打开时自动运行；已有场景会保留。打开 `Assets/Scenes/Inspection.unity`。
+3. 输入模式使用 **Input System Package (New)**；Standalone 使用 XR Simulation，Android 使用 ARCore。Editor 已验证场景启动与表单，Editor 内 AR 平面命中及完整上报未记为通过。
+4. 手机构建使用 **Inspection → Build Android Development APK**，输出 `Builds/inspection-dev.apk`，包名 `cn.inspection.prototype`，仅 ARM64。
+5. 电脑 AVD 流程测试使用 **Inspection → Build x86_64 Simulation APK**，输出 `Builds/inspection-x86-simulation.apk`，独立包名 `cn.inspection.prototype.simulation`。该构建关闭 XR 自动初始化，用带网格虚拟平面测试业务流程，界面显示模拟标识。
+6. Android Build Support 的 SDK/NDK/OpenJDK 必须完整；Gradle 模板包含阿里云镜像与官方源回退。此前依赖下载曾遇到 TLS 中断，最新两种 APK 构建成功；再次失败应查看真实日志再处理。
 
-后端测试与前端构建：
+当前 ARCore Unity 桥接库仅有 ARM ABI。纯 x86_64 AR 诊断包启动缺少 `libUnityARCore.so`；ARM 转译尝试也未建立 AR 会话。独立模拟版是当前已通过的 AVD 开发路径。
 
-```bash
-cd /home/skk/go_project/p1/backend
-go test -race ./...
-go vet ./...
-cd ../frontend
-npm run build
-```
+## API 地址与安装包
 
-浏览器检查需要本机已安装 Chromium/Chrome：
+- **默认**：从 `Assets/Resources/api-config.txt` 读取，界面仅显示选项名称，隐藏地址输入框。最新本机交付包已包含用户确认的服务器 `/api` 地址。
+- **自定义**：显示完整地址输入框；选项与地址保存到 PlayerPrefs，旧版 `apiBaseUrl` 保留为自定义值。切回默认不会丢失自定义值。
+- 仓库配置保留 `http://127.0.0.1:8080`，真实服务器不写入 Git 文档或默认配置。重新构建前，在实际工程本机配置中填写完整 `http://${HOST}:${PORT}/api`；占位符不会自动展开。
+- 应用只在点击“提交问题”时发送请求。开发包允许 HTTP，非 Development 发布需重新核对 HTTPS/明文策略。手机中的 localhost 指手机自身。
 
-```bash
-cd /home/skk/go_project/p1
-CHROME_PATH=/完整路径/chrome node scripts/browser-smoke.mjs
-```
+最新产物在本次 Codex 工作区的 `outputs/`，完整绝对路径及 SHA-256 见 [交接说明](docs/handoff.md)：
 
-脚本自建独立数据与测试进程，检查空列表、状态修改、重启保留、失败恢复、移动布局和真实 CORS。默认端口 18080、15175；占用时通过 `SMOKE_API_PORT`、`SMOKE_WEB_PORT` 调整。截图生成在 `.cache/browser/`，只使用测试数据，不连接部署环境。
+| 文件 | 用途与已验证范围 |
+| --- | --- |
+| `inspection-phone-arm64-api-options.apk` | Android ARM64 真机开发包；构建和签名通过，待真机安装/AR 验收 |
+| `inspection-x86-simulation-api-options.apk` | x86_64 AVD 虚拟流程测试；安装、启动、地址切换与重启记忆通过 |
 
-## Unity 打开、模拟与构建
+旧 `inspection-x86-diagnostic.apk` 是已知 AR 初始化失败的诊断产物，交接时使用上表最新包。手机包沿用此前手机交付包的调试签名；模拟包维持原独立包名和签名。
 
-1. 用 Unity Hub 安装 **2022.3.62f1 LTS**，勾选 Android Build Support、SDK/NDK Tools、OpenJDK。打开本仓库 `unity/` 目录，不要另建外层工程。先等待 Package Manager 解析包和脚本编译。
-2. 首次打开，`ProjectSetup` 自动生成 `Assets/Scenes/Inspection.unity`、Marker/Plane Prefab、PriorityDropdown UI 资源及 XR 配置；也可执行菜单 **Inspection → Setup Project**。该操作保留已有场景，不重建用户修改的场景。设置 Input Handling 为 Both 后，若 Editor 提示重启，完成重启再继续；检查 Project Settings → Player → Active Input Handling 确为 Both。
-3. 确认 Project Settings → XR Plug-in Management：Standalone 启用 XR Simulation，Android 启用 ARCore。生成器为 Android 配置 ARM64、IL2CPP、OpenGLES3、最低 API 24、竖屏、网络权限、AR Required，Depth Optional。运行 XR Project Validation 并处理实际 Editor/SDK 报错。
-4. 打开 `Assets/Scenes/Inspection.unity`，Game 视图用竖屏比例如 720×1280。按 [Unity XR Simulation 5.1 文档](https://docs.unity3d.com/Packages/com.unity.xr.arfoundation@5.1/manual/xr-simulation/simulation.html) 选择包自带/导入的模拟环境；进入 Play，移动模拟相机观察水平面。鼠标右键配合 WASD 用于视角导航，在表单外左键放置标记。UI 显示“Editor 模拟验证”。
-5. 上方显示 AR 状态；检测的平面显示为绿色，点击后放置 10 cm 橙色方块。表单填写标题、描述与优先级后提交。一次编辑一个标记，再点平面移动；点击 UI 不触发 AR 放置。成功清空并销毁当前标记；失败保留。坐标取标记根节点的世界坐标（米）。
-6. **后端地址在运行中的表单首行直接填写**，将保存到 PlayerPrefs，覆盖默认值；也可修改 `Assets/Resources/api-config.txt` 后重新构建（按部署环境填写 `http://${HOST}:${PORT}/api`）。Editor 可用 `http://127.0.0.1:8080`；手机需用电脑可达的局域网 IP 或公网 `https://域名/api`，手机的 localhost 指手机自己。先用手机浏览器访问对应 `/health` 验证网络。
-7. 获得官方支持的 ARCore 真机后，开启 USB 调试，安装/更新 Google Play Services for AR；切换 Build Target 到 Android，执行 **Inspection → Build Android Development APK**。构建产物 `unity/Builds/inspection-dev.apk`。也可批处理 `Unity -batchmode -quit -projectPath /完整路径/p1/unity -buildTarget Android -executeMethod ProjectSetup.BuildAndroid -logFile /日志路径`。打开相机权限并完成真机检查。
-8. 开发 APK 允许 HTTP；非 Development 构建应使用 HTTPS。模拟器不能代替真机相机、传感器、权限和触摸验收。完成首次生成后，提交场景、Prefab、XR 配置及全部 `.meta`，忽略 Library/Temp/Logs/Builds。
+## API 协议
 
-[Google 的 Android Emulator 说明](https://developers.google.com/ar/develop/java/emulator) 要求 x86 系列模拟器。已下载检查本项目锁定的 ARCore 5.1.6 包：`UnityARCore.aar` 与 `ARPresto.aar` 原生库只包含 ARM，不能直接安装此 ARM64 构建在标准 x86 ARCore 模拟器上。当前开发路径因此选 Editor XR Simulation；它也尚需有 Unity Editor 的电脑实际运行。Android Studio 本身不替代 Unity。
+服务器上裸 Go 开发服务使用下列路径；Go 静态托管或服务器同域部署时加 `/api` 前缀。
 
-## API
-
-内部路径如下；公网同域代理时加 `/api` 前缀。
-
-| 方法 | 路径 | 请求 | 成功响应 |
-| --- | --- | --- | --- |
-| GET | /health | 无 | 200 `{"status":"ok"}` |
-| GET | /issues | 无 | 200 问题数组，初始为 `[]` |
-| POST | /issues | title、description、priority、position | 201 完整问题 |
-| PATCH | /issues/{id}/status | `{"status":"resolved"}` | 200 更新后的问题 |
-
-从任意终端测试默认本地 Go：
-
-```bash
-curl http://127.0.0.1:8080/health
-curl -X POST http://127.0.0.1:8080/issues \
-  -H 'Content-Type: application/json' \
-  -d '{"title":"入口墙面破损","description":"左侧墙体存在裂缝","priority":"high","position":{"x":0.42,"y":0.03,"z":1.26}}'
-curl http://127.0.0.1:8080/issues
-# 将下面的实际ID替换为 POST 返回的 id
-curl -X PATCH http://127.0.0.1:8080/issues/实际ID/status \
-  -H 'Content-Type: application/json' -d '{"status":"resolved"}'
-```
-
-返回的完整对象包含 `id/title/description/priority/status/position/createdAt/updatedAt`。ID 由 Go 生成；创建状态固定 `open`；时间为 UTC RFC3339Nano。更新状态保留其他字段，仅更新 status/updatedAt。
-
-校验：title 去空白后非空，description 可选，priority 为 low/medium/high，status 为 open/in_progress/resolved。position 的 x/y/z 必须全部提供数值，零有效，缺失/null/非数值无效。创建不接受 id/status/时间等额外字段；请求上限 64 KiB。非法 JSON 或参数返回 400，问题不存在返回 404，保存失败返回 500。错误示例：
+| 方法 | 路径 | 输入 / 成功结果 |
+| --- | --- | --- |
+| GET | `/health` | `200 {"status":"ok"}` |
+| GET | `/issues` | `200` 问题数组，无数据为 `[]` |
+| POST | `/issues` | `title/description/priority/position` → `201` 完整问题 |
+| PATCH | `/issues/{id}/status` | `{"status":"resolved"}` → `200` 更新后的问题 |
 
 ```json
-{"error":{"code":"INVALID_ARGUMENT","message":"title 不能为空"}}
+{"title":"入口墙面破损","description":"左侧裂缝","priority":"high","position":{"x":0.42,"y":0.03,"z":1.26}}
 ```
 
-## 持久化、部署与限制
+完整问题包含 `id/title/description/priority/status/position/createdAt/updatedAt`。后端生成 ID、默认 `open` 和 UTC RFC3339Nano 时间。标题去空白后必填，描述可选；优先级 `low/medium/high`，状态 `open/in_progress/resolved`；坐标 x/y/z 必须全为数值，零有效。创建不接受额外字段，请求上限 64 KiB。参数错误 `400`、不存在 `404`、保存错误 `500`，错误体形如 `{"error":{"code":"INVALID_ARGUMENT","message":"title 不能为空"}}`。
 
-JSON 文件首次写入时创建，写入同目录临时文件后同步并重命名，成功后才替换内存。损坏数据在启动时明确报错并拒绝覆盖；写入失败不返回成功。设计为**单个 Go 进程**，不能让多个服务实例共享一个 JSON 文件。数据路径不是相对于可执行文件；重启及重新部署必须保持 DATA_FILE 不变。
+## 部署、限制与下一步
 
-`deploy/.env` 已配置当前服务器 ${PORT} 端口；修改后需重启本项目进程生效。部署和服务环境的具体用法见 [deploy/README.md](deploy/README.md)。
+服务器历史部署为 Go 同端口提供管理端和 `/api/*` 的临时 HTTP 服务，用户确认过公网可达；本轮文档交接不代表服务器当前在线检查。运维见 [deploy/README.md](deploy/README.md)，使用忽略文件 `deploy/.env` 与 `scripts/server.py`。尚无域名、HTTPS 或开机自启验收。
 
-AR 坐标只在当前会话有意义，不提供跨设备、跨会话定位或历史标记恢复。未增加登录权限。创建请求没有幂等键或自动重试；网络响应丢失时有重复建单的可能，Unity 提示先查管理端再手动重试。中文字体使用系统动态字体，仍需在目标 Android 设备检查显示效果及安全区。当前没有实际 Unity 运行和真机视频的完成证据；HTTP 部署的实际验证结果见验收记录。
+JSON 持久化按单 Go 进程设计，先写同目录临时文件、同步与替换，成功后再更新内存；不能多实例共享同一文件。数据损坏拒绝启动。创建没有幂等键或自动重试，响应丢失后先查管理端再手动重试。AR 世界坐标仅在当前会话有意义，无跨设备定位及历史标记恢复。未实现登录权限。
+
+后续按 [plan.md](plan.md) 完成：确认真机型号和系统兼容提示 → 安装 ARM64 包 → 相机授权、真实平面与触摸验收 → 同一 ID 的手机/React/Go 重启闭环 → 仓库副本独立导入 → 两段视频。模拟器仍有两个 missing script 警告与图形兼容日志，详见验收记录。当前成果是可交接的开发阶段版本，尚未满足题目全部真机及视频要求。
